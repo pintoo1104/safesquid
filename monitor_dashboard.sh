@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Trap for 'Q' key to exit
+# Trap for Ctrl+C to exit cleanly
 trap "tput cnorm; clear; exit" SIGINT
 
 draw_box() {
-  echo "+$(printf -- '-%.0s' $(seq 1 $1))+"  # draw a horizontal box line
+  echo "+$(printf -- '-%.0s' $(seq 1 $1))+"
 }
 
 draw_section() {
@@ -15,23 +15,23 @@ draw_section() {
 
 while true; do
   clear
-  tput civis  # hide cursor
+  tput civis  # Hide cursor
 
   # HEADER
   draw_section "SYSTEM MONITOR DASHBOARD"
 
-  # CPU
+  # CPU Usage
   cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print 100 - $8}')
   load_avg=$(uptime | awk -F'load average:' '{ print $2 }')
   printf "| CPU Usage: [%-10s] %2.0f%%   Load Avg:%s |\n" "$(printf '#%.0s' $(seq 1 $((cpu_usage / 10))))" "$cpu_usage" "$load_avg"
 
-  # Memory
+  # Memory Usage
   read -r mem_total mem_used <<< $(free -m | awk '/Mem:/ {print $2, $3}')
   mem_percent=$((mem_used * 100 / mem_total))
   swap_info=$(free -h | awk '/Swap:/ {print $3 " / " $2}')
   printf "| Memory:    [%-10s] %2d%%   Swap: %s |\n" "$(printf '#%.0s' $(seq 1 $((mem_percent / 10))))" "$mem_percent" "$swap_info"
 
-  # Disk
+  # Disk Usage
   disk_usage=$(df / | awk 'END {print $5}' | tr -d '%')
   disk_bar=$(printf '#%.0s' $(seq 1 $((disk_usage / 10))))
   disk_warn=""
@@ -51,13 +51,13 @@ while true; do
   draw_section "Network Monitoring"
   connections=$(ss -s | awk '/estab/ {print $4}')
   drops=$(netstat -s | grep -i "dropped" | head -n 1 | awk '{print $1}')
-  in_data=$(ifconfig | grep "RX bytes" | awk '{print $2}' | awk -F: '{sum+=$2} END {print sum/1024/1024 "GB"}')
-  out_data=$(ifconfig | grep "TX bytes" | awk '{print $6}' | awk -F: '{sum+=$2} END {print sum/1024/1024 "GB"}')
+  in_data=$(ifconfig | grep "RX bytes" | awk '{print $2}' | awk -F: '{sum+=$2} END {printf "%.2f GB", sum/1024/1024}')
+  out_data=$(ifconfig | grep "TX bytes" | awk '{print $6}' | awk -F: '{sum+=$2} END {printf "%.2f GB", sum/1024/1024}')
   printf "| Active Connections: %-4s | Packet Drops: %-4s |\n" "$connections" "$drops"
   printf "| Data In: %-10s | Data Out: %-10s |\n" "$in_data" "$out_data"
   draw_box 60
 
-  # Services
+  # Services Status
   draw_section "Services Status"
   for svc in sshd nginx iptables; do
     systemctl is-active --quiet $svc && state="[RUNNING]" || state="[STOPPED]"
@@ -65,8 +65,15 @@ while true; do
   done
   draw_box 60
 
+  # Footer
   echo -e "| Press [Q] to exit | Refreshing every 2s...         |"
   draw_box 60
 
-  sleep 2
+  # Read keypress with timeout
+  read -t 2 -n 1 key
+  if [[ "$key" == "q" || "$key" == "Q" ]]; then
+    tput cnorm
+    clear
+    exit
+  fi
 done
