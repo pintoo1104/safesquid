@@ -1,180 +1,145 @@
 #!/bin/bash
 
-# Function to print headers in the log
+# ===========================
+# Linux Security Audit & Hardening Script
+# Compatible with VirtualBox and Ubuntu 20.04+
+# ===========================
+
+REPORT_FILE="/var/log/security_hardening_report_$(date +%F_%T).log"
+mkdir -p /var/log
+
+echo "===== Security Audit and Hardening Report =====" | tee -a "$REPORT_FILE"
+
 log() {
-    local level="$1"
-    local message="$2"
-    echo "[$(date)] [$level] $message"
+    echo "[$(date)] [INFO] $1" | tee -a "$REPORT_FILE"
 }
 
-# Function to print section headers in the log
-section() {
-    local section_name="$1"
-    log "INFO" "========== $section_name =========="
+error() {
+    echo "[$(date)] [ERROR] $1" | tee -a "$REPORT_FILE"
 }
 
-# User and Group Audits
+# ========== User and Group Audits ==========
 user_group_audit() {
-    section "User and Group Audits"
-    
-    # List all users and groups
-    log "INFO" "Listing all users and groups..."
-    cat /etc/passwd
-
-    # Check for users with UID 0 (root privileges) and report any non-standard users
-    log "INFO" "Checking for users with UID 0 (root privileges)..."
-    awk -F: '$3 == 0 {print $1}' /etc/passwd
-
-    # Identify and report any users without passwords or with weak passwords
-    log "INFO" "Checking for users without passwords..."
-    awk -F: '($2 == "" || $2 == "x") {print $1}' /etc/passwd
+    log "User and Group Audit"
+    getent passwd | tee -a "$REPORT_FILE"
+    getent group | tee -a "$REPORT_FILE"
+    awk -F: '($3 == 0) {print $1}' /etc/passwd | grep -v '^root$' | while read -r user; do
+        error "Non-root user with UID 0: $user"
+    done
+    log "Users without passwords:"
+    awk -F: '($2 == "" || $2 == "*" || $2 == "!" ) {print $1}' /etc/shadow | tee -a "$REPORT_FILE"
 }
 
-# File and Directory Permissions
-file_permissions() {
-    section "File and Directory Permissions"
-    
-    # Scan for files and directories with world-writable permissions
-    log "INFO" "Scanning for world-writable files..."
-    find / -type f -perm -0002 -exec ls -l {} \;
-
-    # Check for the presence of .ssh directories and ensure they have secure permissions
-    log "INFO" "Checking .ssh directories for secure permissions..."
-    find / -type d -name ".ssh" -exec ls -ld {} \;
-
-    # Report any files with SUID or SGID bits set
-    log "INFO" "Checking for SUID/SGID files..."
-    find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -l {} \;
+# ========== File Permissions Audit ==========
+permissions_audit() {
+    log "File and Directory Permissions Audit"
+    find / -xdev -type f -perm -0002 -print | tee -a "$REPORT_FILE"
+    find / -xdev -type d -perm -0002 -print | tee -a "$REPORT_FILE"
+    find /home -name ".ssh" -exec ls -ld {} + | tee -a "$REPORT_FILE"
+    find / -xdev \( -perm -4000 -o -perm -2000 \) -exec ls -ld {} + | tee -a "$REPORT_FILE"
 }
 
-# Service Audits
+# ========== Service Audit ==========
 service_audit() {
-    section "Service Audits"
-    
-    # List all running services and check for any unauthorized services
-    log "INFO" "Listing all running services..."
-    systemctl list-units --type=service --state=running
-
-    # Ensure critical services are running (e.g., sshd, iptables)
-    log "INFO" "Checking critical services (sshd, iptables)..."
-    systemctl is-active sshd
-    systemctl is-active iptables
+    log "Service Audit"
+    systemctl list-units --type=service --state=running | tee -a "$REPORT_FILE"
+    log "Checking for critical services..."
+    for svc in ssh ufw iptables; do
+        systemctl is-enabled "$svc" >/dev/null 2>&1 && log "$svc is enabled" || error "$svc not enabled"
+    done
+    netstat -tulnp | tee -a "$REPORT_FILE"
 }
 
-# Firewall and Network Security
-firewall_network_security() {
-    section "Firewall and Network Security"
-    
-    # Verify that a firewall (e.g., iptables, ufw) is active and configured
-    log "INFO" "Checking if firewall is active..."
-    systemctl is-active ufw || systemctl is-active iptables
-
-    # Report any open ports and their associated services
-    log "INFO" "Listing open ports..."
-    ss -tuln
-
-    # Check for any IP forwarding or insecure network configurations
-    log "INFO" "Checking for IP forwarding..."
-    sysctl net.ipv4.ip_forward
+# ========== Firewall and Network Security ==========
+firewall_network_audit() {
+    log "Firewall and Network Configuration"
+    ufw status | tee -a "$REPORT_FILE"
+    netstat -tuln | tee -a "$REPORT_FILE"
+    sysctl net.ipv4.ip_forward | tee -a "$REPORT_FILE"
+    sysctl net.ipv6.conf.all.disable_ipv6 | tee -a "$REPORT_FILE"
 }
 
-# Public vs. Private IP Checks
-public_private_ip_check() {
-    section "IP and Network Configuration Checks"
-    
-    # Identify whether the server’s IP addresses are public or private
-    log "INFO" "Identifying public and private IPs..."
-    ip -o -4 addr show | awk '{print $2, $4}' | while read iface ip; do
-        if [[ "$ip" =~ ^10\.|^172\.16\..*|^192\.168\..* ]]; then
-            log "INFO" "$iface: Private IP - $ip"
+# ========== IP Configuration Checks ==========
+ip_check() {
+    log "IP Address and Exposure Check"
+    ip -br a | tee -a "$REPORT_FILE"
+    ip a | grep inet | while read -r line; do
+        ip=$(echo $line | awk '{print $2}' | cut -d/ -f1)
+        if [[ $ip == 10.* || $ip == 172.* || $ip == 192.168.* ]]; then
+            log "Private IP: $ip"
         else
-            log "INFO" "$iface: Public IP - $ip"
+            error "Public IP detected: $ip"
         fi
     done
 }
 
-# Security Updates and Patching
-security_updates() {
-    section "Security Updates and Patching"
-    
-    # Check for available security updates
-    log "INFO" "Checking for available security updates..."
-    apt update && apt list --upgradable
-
-    # Ensure unattended-upgrades is configured for security updates
-    log "INFO" "Checking if unattended-upgrades is enabled..."
-    dpkg-query -l | grep unattended-upgrades
+# ========== Security Updates ==========
+check_updates() {
+    log "Checking for Security Updates"
+    apt update -y && apt list --upgradable 2>/dev/null | tee -a "$REPORT_FILE"
+    apt install -y unattended-upgrades
+    dpkg-reconfigure -f noninteractive unattended-upgrades
 }
 
-# Log Monitoring
-log_monitoring() {
-    section "Log Monitoring"
-    
-    # Check for suspicious log entries
-    log "INFO" "Checking for suspicious log entries..."
-    grep "Failed password" /var/log/auth.log
+# ========== Log Monitoring ==========
+monitor_logs() {
+    log "Log Monitoring"
+    grep -i "failed\|invalid" /var/log/auth.log | tail -n 10 | tee -a "$REPORT_FILE"
 }
 
-# SSH Configuration
-ssh_configuration() {
-    section "SSH Configuration"
-    
-    # Implement SSH key-based authentication and disable password-based login for root
-    log "INFO" "Configuring SSH for key-based authentication and disabling password login for root..."
-    sed -i 's/^PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-    sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+# ========== SSH Hardening ==========
+secure_ssh() {
+    log "Securing SSH"
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+    sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
     systemctl restart sshd
 }
 
-# Bootloader Hardening
-secure_grub() {
-    section "Bootloader Hardening"
-    
-    # Ensure a strong password is used (prompting for one if needed)
-    read -sp "Enter password for GRUB bootloader: " grub_password
-    echo
-
-    # Generate PBKDF2 password hash for GRUB
-    PASSWORD_HASH=$(grub-mkpasswd-pbkdf2 <<< "$grub_password" | grep 'PBKDF2' | awk '{print $7}')
-
-    # Add password to GRUB configuration
-    GRUB_FILE="/etc/grub.d/40_custom"
-    
-    # Add password hash to the grub configuration to secure bootloader
-    echo "set superuser=\"admin\"" >> "$GRUB_FILE"
-    echo "password_pbkdf2 admin $PASSWORD_HASH" >> "$GRUB_FILE"
-
-    # Update GRUB to apply changes
-    export DEBIAN_FRONTEND=noninteractive
-    update-grub || log "ERROR" "Failed to update GRUB configuration"
-
-    log "SUCCESS" "GRUB password set and bootloader secured"
+# ========== Disable IPv6 ==========
+disable_ipv6() {
+    log "Disabling IPv6"
+    echo -e "\n# Disable IPv6" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
+    sysctl -p
 }
 
-# Automatic Updates Configuration
-automatic_updates() {
-    section "Automatic Updates"
-    
-    # Configure unattended-upgrades to automatically apply security updates
-    log "INFO" "Configuring unattended-upgrades for automatic security updates..."
-    apt install unattended-upgrades -y
-    dpkg-reconfigure --priority=low unattended-upgrades
+# ========== Bootloader Hardening ==========
+secure_bootloader() {
+    log "Securing Bootloader"
+    GRUB_PASSWORD=${GRUB_PASSWORD:-'SecurePass123'}
+    HASHED_PASSWORD=$(echo -e "$GRUB_PASSWORD\n$GRUB_PASSWORD" | grub-mkpasswd-pbkdf2 | grep grub.pbkdf2 | awk '{print $NF}')
+    {
+        echo "set superusers=\"admin\""
+        echo "password_pbkdf2 admin $HASHED_PASSWORD"
+    } > /etc/grub.d/40_custom
+    update-grub
+    log "GRUB password set and bootloader secured"
 }
 
-# Main function to execute the checks and harden the server
+# ========== Configure Firewall ==========
+configure_firewall() {
+    log "Configuring Firewall"
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow ssh
+    ufw enable
+}
+
+# ========== Run All ==========
 main() {
-    # Run all the functions
     user_group_audit
-    file_permissions
+    permissions_audit
     service_audit
-    firewall_network_security
-    public_private_ip_check
-    security_updates
-    log_monitoring
-    ssh_configuration
-    secure_grub
-    automatic_updates
+    firewall_network_audit
+    ip_check
+    check_updates
+    monitor_logs
+    secure_ssh
+    disable_ipv6
+    secure_bootloader
+    configure_firewall
+    log "Security audit and hardening complete. Report saved to $REPORT_FILE"
 }
 
-# Run the main function
 main
