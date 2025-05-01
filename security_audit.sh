@@ -67,16 +67,24 @@ audit_users() {
     
     # Check password policies
     log "INFO" "Checking password policies..."
-    local weak_pass=$(awk -F: '($2 == "" || $2 == "*" || $2 == "!") {print $1}' /etc/shadow)
-    if [[ -n "$weak_pass" ]]; then
-        log "WARNING" "Users with weak/no password:"
-        echo "$weak_pass"
+    if [[ -f /etc/shadow ]]; then
+        local weak_pass=$(awk -F: '($2 == "" || $2 == "*" || $2 == "!") {print $1}' /etc/shadow)
+        if [[ -n "$weak_pass" ]]; then
+            log "WARNING" "Users with weak/no password:"
+            echo "$weak_pass"
+        fi
+    else
+        log "ERROR" "Cannot access /etc/shadow file"
     fi
     
     # Check sudo access
     log "INFO" "Checking sudo access..."
-    local sudo_users=$(getent group sudo | cut -d: -f4)
-    log "INFO" "Users with sudo access: $sudo_users"
+    if getent group sudo &>/dev/null; then
+        local sudo_users=$(getent group sudo | cut -d: -f4)
+        log "INFO" "Users with sudo access: $sudo_users"
+    else
+        log "INFO" "No sudo group found"
+    fi
 }
 
 # File System Security
@@ -85,19 +93,19 @@ audit_filesystem() {
     
     # World-writable files
     log "INFO" "Checking for world-writable files..."
-    find / -type f -perm -0002 -exec ls -l {} \; 2>/dev/null | while read -r file; do
+    find / -type f -perm -0002 -ls 2>/dev/null | while read -r file; do
         log "WARNING" "World-writable file found: $file"
     done
     
     # SUID/SGID files
     log "INFO" "Checking for SUID/SGID files..."
-    find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -l {} \; 2>/dev/null | while read -r file; do
+    find / -type f \( -perm -4000 -o -perm -2000 \) -ls 2>/dev/null | while read -r file; do
         log "WARNING" "SUID/SGID file found: $file"
     done
     
     # SSH directory permissions
     log "INFO" "Checking SSH directory permissions..."
-    find /home -name ".ssh" -type d -exec ls -ld {} \; 2>/dev/null | while read -r dir; do
+    find /home -name ".ssh" -type d -ls 2>/dev/null | while read -r dir; do
         if [[ $(stat -c %a "$dir") != "700" ]]; then
             log "ERROR" "Insecure SSH directory permissions: $dir"
         fi
@@ -110,21 +118,35 @@ audit_network() {
     
     # Check listening ports
     log "INFO" "Checking listening ports..."
-    netstat -tuln | grep LISTEN | while read -r line; do
-        log "INFO" "Open port: $line"
-    done
+    if command -v netstat &>/dev/null; then
+        netstat -tuln 2>/dev/null | grep LISTEN | while read -r line; do
+            log "INFO" "Open port: $line"
+        done
+    elif command -v ss &>/dev/null; then
+        ss -tuln 2>/dev/null | grep LISTEN | while read -r line; do
+            log "INFO" "Open port: $line"
+        done
+    else
+        log "ERROR" "Neither netstat nor ss command found"
+    fi
     
     # Check firewall status
     log "INFO" "Checking firewall status..."
-    if command -v ufw >/dev/null 2>&1; then
+    if command -v ufw &>/dev/null; then
         if ufw status | grep -q "Status: active"; then
             log "SUCCESS" "UFW is active"
+            ufw status numbered | while read -r rule; do
+                log "INFO" "UFW Rule: $rule"
+            done
         else
             log "ERROR" "UFW is not active"
         fi
-    elif command -v iptables >/dev/null 2>&1; then
+    elif command -v iptables &>/dev/null; then
         if iptables -L | grep -q "Chain"; then
             log "SUCCESS" "IPTables rules exist"
+            iptables -L -n -v | while read -r rule; do
+                log "INFO" "IPTables Rule: $rule"
+            done
         else
             log "ERROR" "No IPTables rules found"
         fi
@@ -138,10 +160,21 @@ audit_services() {
     section_header "SERVICE SECURITY"
     
     for service in "${IMPORTANT_SERVICES[@]}"; do
-        if systemctl is-active "$service" >/dev/null 2>&1; then
-            log "SUCCESS" "Service $service is running"
+        if command -v systemctl &>/dev/null; then
+            if systemctl is-active "$service" &>/dev/null; then
+                log "SUCCESS" "Service $service is running"
+                systemctl status "$service" --no-pager | grep "Active:" | while read -r status; do
+                    log "INFO" "$service status: $status"
+                done
+            else
+                log "WARNING" "Service $service is not running"
+            fi
         else
-            log "WARNING" "Service $service is not running"
+            if pgrep -x "$service" &>/dev/null; then
+                log "SUCCESS" "Service $service is running"
+            else
+                log "WARNING" "Service $service is not running"
+            fi
         fi
     done
 }
@@ -150,15 +183,34 @@ audit_services() {
 check_updates() {
     section_header "SYSTEM UPDATES"
     
-    if command -v apt-get >/dev/null 2>&1; then
+    if command -v apt-get &>/dev/null; then
         log "INFO" "Checking for updates (Debian/Ubuntu)..."
-        apt-get update >/dev/null 2>&1
-        local updates=$(apt-get -s upgrade | grep -P "^Inst" | wc -l)
-        log "INFO" "$updates updates available"
-    elif command -v yum >/dev/null 2>&1; then
+        if apt-get update &>/dev/null; then
+            local updates=$(apt-get -s upgrade 2>/dev/null | grep -P "^Inst" | wc -l)
+            log "INFO" "$updates updates available"
+            if [[ $updates -gt 0 ]]; then
+                apt-get -s upgrade 2>/dev/null | grep -P "^Inst" | while read -r pkg; do
+                    log "INFO" "Update available: $pkg"
+                done
+            fi
+        else
+            log "ERROR" "Failed to check for updates"
+        fi
+    elif command -v yum &>/dev/null; then
         log "INFO" "Checking for updates (RHEL/CentOS)..."
-        local updates=$(yum check-update --quiet | grep -v "^$" | wc -l)
-        log "INFO" "$updates updates available"
+        if yum check-update &>/dev/null; then
+            local updates=$(yum check-update --quiet 2>/dev/null | grep -v "^$" | wc -l)
+            log "INFO" "$updates updates available"
+            if [[ $updates -gt 0 ]]; then
+                yum check-update --quiet 2>/dev/null | while read -r pkg; do
+                    log "INFO" "Update available: $pkg"
+                done
+            fi
+        else
+            log "ERROR" "Failed to check for updates"
+        fi
+    else
+        log "ERROR" "No supported package manager found"
     fi
 }
 
@@ -167,14 +219,18 @@ check_ip_config() {
     section_header "IP CONFIGURATION"
     
     log "INFO" "Checking IP addresses..."
-    ip addr show | grep "inet " | while read -r line; do
-        local ip=$(echo "$line" | awk '{print $2}')
-        if [[ $ip =~ ^(192\.168|10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.) ]]; then
-            log "INFO" "Private IP found: $ip"
-        else
-            log "WARNING" "Public IP found: $ip"
-        fi
-    done
+    if command -v ip &>/dev/null; then
+        ip addr show 2>/dev/null | grep "inet " | while read -r line; do
+            local ip=$(echo "$line" | awk '{print $2}')
+            if [[ $ip =~ ^(192\.168|10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.) ]]; then
+                log "INFO" "Private IP found: $ip"
+            else
+                log "WARNING" "Public IP found: $ip"
+            fi
+        done
+    else
+        log "ERROR" "ip command not found"
+    fi
 }
 
 # Main execution
