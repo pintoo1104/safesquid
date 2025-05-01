@@ -4,18 +4,19 @@
 # Linux Security Audit & Hardening Script
 # ===========================
 
+# Define the output file to be created in the current directory
 REPORT_FILE="./security_hardening_report_$(date +%F_%H-%M-%S).txt"
 
-# Function to display and append output to the report file
-output_and_report() {
-    echo "$1"    # Display the output in terminal
-    echo "$1" >> "$REPORT_FILE"  # Save the output to the file
-}
-
-# Create the report file and add initial details
+# Initialize the report file
 echo "===== Security Audit and Hardening Report =====" > "$REPORT_FILE"
 echo "Security Audit and Hardening Report - $(date)" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
+
+# Function to display output and also save it to the report file
+output_and_report() {
+    echo "$1"        # Display the output in terminal
+    echo "$1" >> "$REPORT_FILE"  # Save the output to the file
+}
 
 # ========== User and Group Audits ==========
 user_group_audit() {
