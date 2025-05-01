@@ -9,13 +9,14 @@ REPORT="security_audit_report.txt"
 
 print_title() {
     local title="$1"
-    echo -e "\n\033[1;34m========== $title ==========\033[0m"
-    echo -e "\n========== $title ==========" >> "$REPORT"
+    echo -e "\n\033[1;44m========= $title =========\033[0m"
+    echo -e "\n========= $title =========" >> "$REPORT"
 }
 
 print_subtitle() {
-    echo -e "\n\033[1;32m-- $1 --\033[0m"
-    echo -e "\n-- $1 --" >> "$REPORT"
+    local subtitle="$1"
+    echo -e "\n\033[1;42m-- $subtitle --\033[0m"
+    echo -e "\n-- $subtitle --" >> "$REPORT"
 }
 
 # 1. User and Group Audits
@@ -23,13 +24,19 @@ user_audit() {
     print_title "1. USER AND GROUP AUDIT"
 
     print_subtitle "Users with UID 0 (root access)"
-    getent passwd | awk -F: '$3 == 0 {print "UID 0 user: "$1}' | tee -a "$REPORT"
+    root_users=$(getent passwd | awk -F: '$3 == 0 {print $1}')
+    echo "$root_users" | tee -a "$REPORT"
+    echo -e "\033[1;33mTotal: $(echo "$root_users" | wc -l)\033[0m"
 
     print_subtitle "Users with no password set (potential risk)"
-    getent passwd | cut -d: -f1 | xargs -n1 -I{} sudo passwd -S {} | grep -E "NP|!!" | tee -a "$REPORT"
+    no_pass_users=$(getent passwd | cut -d: -f1 | xargs -n1 -I{} sudo passwd -S {} 2>/dev/null | grep -E "NP|!!")
+    echo "$no_pass_users" | tee -a "$REPORT"
+    echo -e "\033[1;33mTotal: $(echo "$no_pass_users" | wc -l)\033[0m"
 
     print_subtitle "All Local Groups"
-    cut -d: -f1 /etc/group | tee -a "$REPORT"
+    groups=$(cut -d: -f1 /etc/group)
+    echo "$groups" | tee -a "$REPORT"
+    echo -e "\033[1;33mTotal Groups: $(echo "$groups" | wc -l)\033[0m"
 }
 
 # 2. File and Directory Permissions
@@ -37,13 +44,19 @@ file_permission_audit() {
     print_title "2. FILE AND DIRECTORY PERMISSIONS"
 
     print_subtitle "World-writable directories"
-    find / -type d -perm -0002 -exec ls -ld {} \; 2>/dev/null | tee -a "$REPORT"
+    dirs=$(find / -type d -perm -0002 -exec ls -ld {} \; 2>/dev/null)
+    echo "$dirs" | tee -a "$REPORT"
+    echo -e "\033[1;33mCount: $(echo "$dirs" | wc -l)\033[0m"
 
     print_subtitle "SUID/SGID Files"
-    find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -ld {} \; 2>/dev/null | tee -a "$REPORT"
+    suid_sgid=$(find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -ld {} \; 2>/dev/null)
+    echo "$suid_sgid" | tee -a "$REPORT"
+    echo -e "\033[1;33mCount: $(echo "$suid_sgid" | wc -l)\033[0m"
 
     print_subtitle "SSH Directory Permissions"
-    find /home -name ".ssh" -exec ls -ld {} \; 2>/dev/null | tee -a "$REPORT"
+    ssh_dirs=$(find /home -name ".ssh" -exec ls -ld {} \; 2>/dev/null)
+    echo "$ssh_dirs" | tee -a "$REPORT"
+    echo -e "\033[1;33mFound: $(echo "$ssh_dirs" | wc -l) .ssh directories\033[0m"
 }
 
 # 3. Service Audits
@@ -51,10 +64,14 @@ service_audit() {
     print_title "3. SERVICE AUDIT"
 
     print_subtitle "Running Services"
-    systemctl list-units --type=service --state=running | tee -a "$REPORT"
+    services=$(systemctl list-units --type=service --state=running)
+    echo "$services" | tee -a "$REPORT"
+    echo -e "\033[1;33mTotal Running: $(echo "$services" | grep '.service' | wc -l)\033[0m"
 
     print_subtitle "Listening Network Ports (excluding localhost)"
-    netstat -tulnp | grep -v "127.0.0.1" | tee -a "$REPORT"
+    ports=$(netstat -tulnp | grep -v "127.0.0.1")
+    echo "$ports" | tee -a "$REPORT"
+    echo -e "\033[1;33mListening Ports: $(echo "$ports" | wc -l)\033[0m"
 }
 
 # 4. Firewall and Network Security
@@ -71,7 +88,9 @@ firewall_audit() {
     fi
 
     print_subtitle "Active Listening Ports"
-    ss -tuln | tee -a "$REPORT"
+    ports=$(ss -tuln)
+    echo "$ports" | tee -a "$REPORT"
+    echo -e "\033[1;33mActive: $(echo "$ports" | grep -c LISTEN)\033[0m"
 }
 
 # 5. IP and Network Configuration
@@ -79,13 +98,16 @@ ip_check() {
     print_title "5. IP CONFIGURATION CHECK"
 
     print_subtitle "Assigned IP Addresses"
+    count=0
     ip -4 addr show | grep inet | awk '{print $2}' | while read ip; do
         if [[ "$ip" =~ ^10\.|^172\.1[6-9]|^192\.168 ]]; then
             echo "Private IP: $ip" | tee -a "$REPORT"
         else
             echo "Public IP: $ip" | tee -a "$REPORT"
         fi
+        ((count++))
     done
+    echo -e "\033[1;33mTotal IPs Found: $count\033[0m"
 }
 
 # 6. Security Updates and Patching
@@ -95,10 +117,12 @@ update_check() {
     print_subtitle "Available Updates"
     if command -v apt &> /dev/null; then
         apt update -y > /dev/null
-        apt list --upgradable 2>/dev/null | tee -a "$REPORT"
+        updates=$(apt list --upgradable 2>/dev/null)
     elif command -v yum &> /dev/null; then
-        yum check-update | tee -a "$REPORT"
+        updates=$(yum check-update)
     fi
+    echo "$updates" | tee -a "$REPORT"
+    echo -e "\033[1;33mUpdate Count: $(echo "$updates" | grep -cE '^[a-zA-Z0-9]')\033[0m"
 }
 
 # 7. Log Monitoring
@@ -106,7 +130,9 @@ log_monitor() {
     print_title "7. LOGIN ATTEMPTS & AUTH LOGS"
 
     print_subtitle "Recent Failed Login Attempts"
-    grep "Failed password" /var/log/auth.log | tail -n 10 | tee -a "$REPORT"
+    fails=$(grep "Failed password" /var/log/auth.log | tail -n 10)
+    echo "$fails" | tee -a "$REPORT"
+    echo -e "\033[1;33mEntries Shown: $(echo "$fails" | wc -l)\033[0m"
 }
 
 # 8. Server Hardening
@@ -125,7 +151,7 @@ server_hardening() {
     sysctl -p | tee -a "$REPORT"
 
     print_subtitle "Bootloader Security Check"
-    echo "Manual verification recommended for /boot/grub/grub.cfg permissions." | tee -a "$REPORT"
+    echo "Manual check: run 'ls -l /boot/grub/grub.cfg'" | tee -a "$REPORT"
 }
 
 # 9. Custom Checks Placeholder
@@ -137,7 +163,8 @@ custom_checks() {
 # 10. Summary
 summary() {
     print_title "10. AUDIT COMPLETED"
-    echo "Complete report saved to: $REPORT" | tee -a "$REPORT"
+    echo -e "\033[1;35mAudit report saved to: $REPORT\033[0m"
+    echo "Complete report saved to: $REPORT" >> "$REPORT"
 }
 
 # Main
