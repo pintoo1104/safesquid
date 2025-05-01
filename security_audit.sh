@@ -57,33 +57,37 @@ audit_users() {
     
     # Check root users
     log "INFO" "Checking for users with root privileges..."
-    local root_users=$(awk -F: '$3 == 0 {print $1}' /etc/passwd)
-    if [[ $(echo "$root_users" | wc -l) -gt 1 ]]; then
-        log "WARNING" "Multiple users found with UID 0:"
-        echo "$root_users" | while read -r user; do
-            log "WARNING" "Root user: $user"
-        done
+    if [[ -f /etc/passwd ]]; then
+        local root_users=$(awk -F: '$3 == 0 {print $1}' /etc/passwd)
+        if [[ $(echo "$root_users" | wc -l) -gt 1 ]]; then
+            log "WARNING" "Multiple users found with UID 0:"
+            echo "$root_users" | while read -r user; do
+                log "WARNING" "Root user: $user"
+            done
+        fi
+    else
+        log "ERROR" "Cannot access /etc/passwd file"
     fi
     
     # Check password policies
     log "INFO" "Checking password policies..."
-    if [[ -f /etc/shadow ]]; then
+    if [[ -f /etc/shadow ]] && [[ -r /etc/shadow ]]; then
         local weak_pass=$(awk -F: '($2 == "" || $2 == "*" || $2 == "!") {print $1}' /etc/shadow)
         if [[ -n "$weak_pass" ]]; then
             log "WARNING" "Users with weak/no password:"
             echo "$weak_pass"
         fi
     else
-        log "ERROR" "Cannot access /etc/shadow file"
+        log "WARNING" "Cannot access /etc/shadow file - some password checks skipped"
     fi
     
     # Check sudo access
     log "INFO" "Checking sudo access..."
-    if getent group sudo &>/dev/null; then
+    if command -v getent &>/dev/null && getent group sudo &>/dev/null; then
         local sudo_users=$(getent group sudo | cut -d: -f4)
         log "INFO" "Users with sudo access: $sudo_users"
     else
-        log "INFO" "No sudo group found"
+        log "INFO" "No sudo group found or getent not available"
     fi
 }
 
@@ -93,23 +97,36 @@ audit_filesystem() {
     
     # World-writable files
     log "INFO" "Checking for world-writable files..."
-    find / -type f -perm -0002 -ls 2>/dev/null | while read -r file; do
-        log "WARNING" "World-writable file found: $file"
-    done
+    if command -v find &>/dev/null; then
+        find / -type f -perm -0002 -ls 2>/dev/null | while read -r file; do
+            log "WARNING" "World-writable file found: $file"
+        done
+    else
+        log "ERROR" "find command not available"
+    fi
     
     # SUID/SGID files
     log "INFO" "Checking for SUID/SGID files..."
-    find / -type f \( -perm -4000 -o -perm -2000 \) -ls 2>/dev/null | while read -r file; do
-        log "WARNING" "SUID/SGID file found: $file"
-    done
+    if command -v find &>/dev/null; then
+        find / -type f \( -perm -4000 -o -perm -2000 \) -ls 2>/dev/null | while read -r file; do
+            log "WARNING" "SUID/SGID file found: $file"
+        done
+    fi
     
     # SSH directory permissions
     log "INFO" "Checking SSH directory permissions..."
-    find /home -name ".ssh" -type d -ls 2>/dev/null | while read -r dir; do
-        if [[ $(stat -c %a "$dir") != "700" ]]; then
-            log "ERROR" "Insecure SSH directory permissions: $dir"
-        fi
-    done
+    if command -v find &>/dev/null && command -v stat &>/dev/null; then
+        find /home -name ".ssh" -type d -ls 2>/dev/null | while read -r dir; do
+            if [[ -d "$dir" ]]; then
+                local perms=$(stat -c %a "$dir")
+                if [[ "$perms" != "700" ]]; then
+                    log "ERROR" "Insecure SSH directory permissions ($perms): $dir"
+                fi
+            fi
+        done
+    else
+        log "ERROR" "Required commands (find/stat) not available"
+    fi
 }
 
 # Network Security
@@ -118,16 +135,16 @@ audit_network() {
     
     # Check listening ports
     log "INFO" "Checking listening ports..."
-    if command -v netstat &>/dev/null; then
-        netstat -tuln 2>/dev/null | grep LISTEN | while read -r line; do
-            log "INFO" "Open port: $line"
-        done
-    elif command -v ss &>/dev/null; then
+    if command -v ss &>/dev/null; then
         ss -tuln 2>/dev/null | grep LISTEN | while read -r line; do
             log "INFO" "Open port: $line"
         done
+    elif command -v netstat &>/dev/null; then
+        netstat -tuln 2>/dev/null | grep LISTEN | while read -r line; do
+            log "INFO" "Open port: $line"
+        done
     else
-        log "ERROR" "Neither netstat nor ss command found"
+        log "ERROR" "Neither ss nor netstat command found"
     fi
     
     # Check firewall status
@@ -135,17 +152,17 @@ audit_network() {
     if command -v ufw &>/dev/null; then
         if ufw status | grep -q "Status: active"; then
             log "SUCCESS" "UFW is active"
-            ufw status numbered | while read -r rule; do
-                log "INFO" "UFW Rule: $rule"
+            ufw status numbered 2>/dev/null | while read -r rule; do
+                [[ -n "$rule" ]] && log "INFO" "UFW Rule: $rule"
             done
         else
             log "ERROR" "UFW is not active"
         fi
     elif command -v iptables &>/dev/null; then
-        if iptables -L | grep -q "Chain"; then
+        if iptables -L 2>/dev/null | grep -q "Chain"; then
             log "SUCCESS" "IPTables rules exist"
-            iptables -L -n -v | while read -r rule; do
-                log "INFO" "IPTables Rule: $rule"
+            iptables -L -n -v 2>/dev/null | while read -r rule; do
+                [[ -n "$rule" ]] && log "INFO" "IPTables Rule: $rule"
             done
         else
             log "ERROR" "No IPTables rules found"
@@ -163,17 +180,23 @@ audit_services() {
         if command -v systemctl &>/dev/null; then
             if systemctl is-active "$service" &>/dev/null; then
                 log "SUCCESS" "Service $service is running"
-                systemctl status "$service" --no-pager | grep "Active:" | while read -r status; do
+                systemctl status "$service" --no-pager 2>/dev/null | grep "Active:" | while read -r status; do
                     log "INFO" "$service status: $status"
                 done
             else
                 log "WARNING" "Service $service is not running"
             fi
-        else
-            if pgrep -x "$service" &>/dev/null; then
+        elif command -v service &>/dev/null; then
+            if service "$service" status &>/dev/null; then
                 log "SUCCESS" "Service $service is running"
             else
                 log "WARNING" "Service $service is not running"
+            fi
+        else
+            if pgrep -x "$service" &>/dev/null; then
+                log "SUCCESS" "Service $service is running (checked via process)"
+            else
+                log "WARNING" "Service $service is not running (checked via process)"
             fi
         fi
     done
@@ -203,7 +226,7 @@ check_updates() {
             log "INFO" "$updates updates available"
             if [[ $updates -gt 0 ]]; then
                 yum check-update --quiet 2>/dev/null | while read -r pkg; do
-                    log "INFO" "Update available: $pkg"
+                    [[ -n "$pkg" ]] && log "INFO" "Update available: $pkg"
                 done
             fi
         else
@@ -228,8 +251,17 @@ check_ip_config() {
                 log "WARNING" "Public IP found: $ip"
             fi
         done
+    elif command -v ifconfig &>/dev/null; then
+        ifconfig 2>/dev/null | grep "inet " | while read -r line; do
+            local ip=$(echo "$line" | awk '{print $2}')
+            if [[ $ip =~ ^(192\.168|10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.) ]]; then
+                log "INFO" "Private IP found: $ip"
+            else
+                log "WARNING" "Public IP found: $ip"
+            fi
+        done
     else
-        log "ERROR" "ip command not found"
+        log "ERROR" "No IP configuration tools found"
     fi
 }
 
