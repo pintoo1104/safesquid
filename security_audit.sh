@@ -22,56 +22,56 @@ output_and_report() {
 user_group_audit() {
     output_and_report "User and Group Audit"
     output_and_report "List of all users and groups:"
-    getent passwd
-    getent group
+    getent passwd >> "$REPORT_FILE"
+    getent group >> "$REPORT_FILE"
     output_and_report "Non-root users with UID 0:"
-    awk -F: '($3 == 0) {print $1}' /etc/passwd | grep -v '^root$'
+    awk -F: '($3 == 0) {print $1}' /etc/passwd | grep -v '^root$' >> "$REPORT_FILE"
     output_and_report "Users without passwords:"
-    awk -F: '($2 == "" || $2 == "*" || $2 == "!" ) {print $1}' /etc/shadow
+    awk -F: '($2 == "" || $2 == "*" || $2 == "!" ) {print $1}' /etc/shadow >> "$REPORT_FILE"
 }
 
 # ========== File Permissions Audit ==========
 permissions_audit() {
     output_and_report "File and Directory Permissions Audit"
     output_and_report "Files and directories with world-writable permissions:"
-    find / -xdev -type f -perm -0002 -print
-    find / -xdev -type d -perm -0002 -print
+    find / -xdev -type f -perm -0002 -print >> "$REPORT_FILE"
+    find / -xdev -type d -perm -0002 -print >> "$REPORT_FILE"
     output_and_report ".ssh directories:"
-    find /home -name ".ssh" -exec ls -ld {} +
+    find /home -name ".ssh" -exec ls -ld {} + >> "$REPORT_FILE"
     output_and_report "Files with SUID/SGID bits set:"
-    find / -xdev \( -perm -4000 -o -perm -2000 \) -exec ls -ld {} +
+    find / -xdev \( -perm -4000 -o -perm -2000 \) -exec ls -ld {} + >> "$REPORT_FILE"
 }
 
 # ========== Service Audit ==========
 service_audit() {
     output_and_report "Service Audit"
     output_and_report "List of running services:"
-    systemctl list-units --type=service --state=running
+    systemctl list-units --type=service --state=running >> "$REPORT_FILE"
     output_and_report "Critical services status:"
     for svc in ssh ufw iptables; do
         systemctl is-enabled "$svc" >/dev/null 2>&1 && echo "$svc is enabled" || echo "$svc not enabled"
-    done
+    done >> "$REPORT_FILE"
     output_and_report "Active network ports and services:"
-    netstat -tulnp
+    netstat -tulnp >> "$REPORT_FILE"
 }
 
 # ========== Firewall and Network Security ==========
 firewall_network_audit() {
     output_and_report "Firewall and Network Configuration"
     output_and_report "Firewall status (ufw):"
-    ufw status
+    ufw status >> "$REPORT_FILE"
     output_and_report "Active network ports:"
-    netstat -tuln
+    netstat -tuln >> "$REPORT_FILE"
     output_and_report "IP forwarding status:"
-    sysctl net.ipv4.ip_forward
-    sysctl net.ipv6.conf.all.disable_ipv6
+    sysctl net.ipv4.ip_forward >> "$REPORT_FILE"
+    sysctl net.ipv6.conf.all.disable_ipv6 >> "$REPORT_FILE"
 }
 
 # ========== IP Configuration Checks ==========
 ip_check() {
     output_and_report "IP Address and Exposure Check"
     output_and_report "IP address details:"
-    ip -br a
+    ip -br a >> "$REPORT_FILE"
     ip a | grep inet | while read -r line; do
         ip=$(echo $line | awk '{print $2}' | cut -d/ -f1)
         if [[ $ip == 10.* || $ip == 172.* || $ip == 192.168.* ]]; then
@@ -79,13 +79,13 @@ ip_check() {
         else
             output_and_report "Public IP detected: $ip"
         fi
-    done
+    done >> "$REPORT_FILE"
 }
 
 # ========== Security Updates ==========
 check_updates() {
     output_and_report "Checking for Security Updates"
-    apt update -y && apt list --upgradable 2>/dev/null
+    apt update -y && apt list --upgradable 2>/dev/null >> "$REPORT_FILE"
     apt install -y unattended-upgrades
     dpkg-reconfigure -f noninteractive unattended-upgrades
 }
@@ -94,7 +94,7 @@ check_updates() {
 monitor_logs() {
     output_and_report "Log Monitoring"
     output_and_report "Recent failed login attempts:"
-    grep -i "failed\|invalid" /var/log/auth.log | tail -n 10
+    grep -i "failed\|invalid" /var/log/auth.log | tail -n 10 >> "$REPORT_FILE"
 }
 
 # ========== SSH Hardening ==========
