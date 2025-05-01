@@ -1,206 +1,197 @@
 #!/bin/bash
 
-# ==============================
-# Linux Security Audit Dashboard
-# ==============================
+# Secure error handling
+set -euo pipefail
+IFS=$'\n\t'
 
+# Configuration
 REPORT="security_audit_report.txt"
-> "$REPORT"
+LOG_DIR="/var/log"
+IMPORTANT_SERVICES=("sshd" "nginx" "apache2" "iptables" "ufw")
+CRITICAL_PORTS=(22 80 443)
 
-print_title() {
+# Initialize report
+: > "$REPORT"
+
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Helper functions
+log() {
+    local level="$1"
+    local message="$2"
+    local color=""
+    
+    case "$level" in
+        "INFO") color="$BLUE" ;;
+        "WARNING") color="$YELLOW" ;;
+        "ERROR") color="$RED" ;;
+        "SUCCESS") color="$GREEN" ;;
+    esac
+    
+    echo -e "${color}[$level] $message${NC}"
+    echo "[$level] $message" >> "$REPORT"
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log "ERROR" "This script must be run as root"
+        exit 1
+    fi
+}
+
+section_header() {
     local title="$1"
-    echo -e "\n\033[1;34m========== $title ==========\033[0m"
-    echo -e "\n========== $title ==========" >> "$REPORT"
+    local line="================================================================"
+    echo -e "\n${BLUE}$line\n$title\n$line${NC}"
+    echo -e "\n$line\n$title\n$line" >> "$REPORT"
 }
 
-print_subtitle() {
-    echo -e "\n\033[1;32m-- $1 --\033[0m"
-    echo -e "\n-- $1 --" >> "$REPORT"
-}
-
-log_and_print() {
-    echo -e "$1"
-    echo -e "$1" >> "$REPORT"
-}
-
-section() {
-    echo -e "\n+------------------------------------------------------------+"
-    echo -e "| $1"
-    echo -e "+------------------------------------------------------------+"
-    echo -e "\n+------------------------------------------------------------+" >> "$REPORT"
-    echo -e "| $1" >> "$REPORT"
-    echo -e "+------------------------------------------------------------+" >> "$REPORT"
-}
-
-# 1. User and Group Audits
-user_audit() {
-    print_title "1. USER AND GROUP AUDIT"
-
-    section "Users with UID 0 (root access)"
-    root_users=$(getent passwd | awk -F: '$3 == 0 {print $1}')
-    log_and_print "$root_users"
-    log_and_print "\n→ Total users with UID 0: $(echo "$root_users" | wc -l)"
-
-    section "Users with no password set (potential risk)"
-    no_pass=$(getent passwd | cut -d: -f1 | xargs -n1 -I{} sudo passwd -S {} 2>/dev/null | grep -E "NP|!!")
-    log_and_print "$no_pass"
-    log_and_print "\n→ Total users without password: $(echo "$no_pass" | wc -l)"
-
-    section "All Local Groups"
-    groups=$(cut -d: -f1 /etc/group)
-    log_and_print "$groups"
-    log_and_print "\n→ Total groups: $(echo "$groups" | wc -l)"
-}
-
-# 2. File and Directory Permissions
-file_permission_audit() {
-    print_title "2. FILE AND DIRECTORY PERMISSIONS"
-
-    section "World-writable directories"
-    dirs=$(find / -type d -perm -0002 -exec ls -ld {} \; 2>/dev/null)
-    log_and_print "$dirs"
-    log_and_print "\n→ Total world-writable directories: $(echo "$dirs" | grep -c '^')"
-
-    section "SUID/SGID Files"
-    suid_sgid=$(find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -ld {} \; 2>/dev/null)
-    log_and_print "$suid_sgid"
-    log_and_print "\n→ Total SUID/SGID files: $(echo "$suid_sgid" | grep -c '^')"
-
-    section "SSH Directory Permissions"
-    ssh_dirs=$(find /home -name ".ssh" -exec ls -ld {} \; 2>/dev/null)
-    log_and_print "$ssh_dirs"
-    log_and_print "\n→ Total .ssh directories: $(echo "$ssh_dirs" | wc -l)"
-}
-
-# 3. Service Audits
-service_audit() {
-    print_title "3. SERVICE AUDIT"
-
-    section "Running Services"
-    running=$(systemctl list-units --type=service --state=running)
-    log_and_print "$running"
-    log_and_print "\n→ Total running services: $(echo "$running" | grep -c 'loaded')"
-
-    section "Listening Network Ports (excluding localhost)"
-    ports=$(netstat -tulnp | grep -v "127.0.0.1")
-    log_and_print "$ports"
-    log_and_print "\n→ Total open ports (non-localhost): $(echo "$ports" | grep -c '^')"
-}
-
-# 4. Firewall and Network Security
-firewall_audit() {
-    print_title "4. FIREWALL & NETWORK SECURITY"
-
-    section "Firewall Rules"
-    if command -v ufw &> /dev/null; then
-        rules=$(ufw status verbose)
-        log_and_print "$rules"
-    elif command -v iptables &> /dev/null; then
-        rules=$(iptables -L -n -v)
-        log_and_print "$rules"
-    else
-        log_and_print "No firewall tool (ufw/iptables) found."
+# User and Group Audit
+audit_users() {
+    section_header "USER AND GROUP AUDIT"
+    
+    # Check root users
+    log "INFO" "Checking for users with root privileges..."
+    local root_users=$(awk -F: '$3 == 0 {print $1}' /etc/passwd)
+    if [[ $(echo "$root_users" | wc -l) -gt 1 ]]; then
+        log "WARNING" "Multiple users found with UID 0:"
+        echo "$root_users" | while read -r user; do
+            log "WARNING" "Root user: $user"
+        done
     fi
-
-    section "Active Listening Ports"
-    ss_output=$(ss -tuln)
-    log_and_print "$ss_output"
-    log_and_print "\n→ Total listening ports: $(echo "$ss_output" | grep -c '^tcp\|^udp')"
+    
+    # Check password policies
+    log "INFO" "Checking password policies..."
+    local weak_pass=$(awk -F: '($2 == "" || $2 == "*" || $2 == "!") {print $1}' /etc/shadow)
+    if [[ -n "$weak_pass" ]]; then
+        log "WARNING" "Users with weak/no password:"
+        echo "$weak_pass"
+    fi
+    
+    # Check sudo access
+    log "INFO" "Checking sudo access..."
+    local sudo_users=$(getent group sudo | cut -d: -f4)
+    log "INFO" "Users with sudo access: $sudo_users"
 }
 
-# 5. IP and Network Configuration
-ip_check() {
-    print_title "5. IP CONFIGURATION CHECK"
-
-    section "Assigned IP Addresses"
-    ip_list=$(ip -4 addr show | grep inet | awk '{print $2}')
-    private=0
-    public=0
-    while read ip; do
-        if [[ "$ip" =~ ^10\. || "$ip" =~ ^172\.1[6-9] || "$ip" =~ ^192\.168 ]]; then
-            log_and_print "Private IP: $ip"
-            ((private++))
-        else
-            log_and_print "Public IP: $ip"
-            ((public++))
+# File System Security
+audit_filesystem() {
+    section_header "FILE SYSTEM SECURITY"
+    
+    # World-writable files
+    log "INFO" "Checking for world-writable files..."
+    find / -type f -perm -0002 -exec ls -l {} \; 2>/dev/null | while read -r file; do
+        log "WARNING" "World-writable file found: $file"
+    done
+    
+    # SUID/SGID files
+    log "INFO" "Checking for SUID/SGID files..."
+    find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -l {} \; 2>/dev/null | while read -r file; do
+        log "WARNING" "SUID/SGID file found: $file"
+    done
+    
+    # SSH directory permissions
+    log "INFO" "Checking SSH directory permissions..."
+    find /home -name ".ssh" -type d -exec ls -ld {} \; 2>/dev/null | while read -r dir; do
+        if [[ $(stat -c %a "$dir") != "700" ]]; then
+            log "ERROR" "Insecure SSH directory permissions: $dir"
         fi
-    done <<< "$ip_list"
-    log_and_print "\n→ Private IPs: $private, Public IPs: $public"
+    done
 }
 
-# 6. Security Updates and Patching
-update_check() {
-    print_title "6. SECURITY UPDATES & PATCHING"
-
-    section "Available Updates"
-    if command -v apt &> /dev/null; then
-        apt update -y > /dev/null
-        updates=$(apt list --upgradable 2>/dev/null)
-        log_and_print "$updates"
-        log_and_print "\n→ Total upgradable packages: $(echo "$updates" | grep -c '/')"
-    elif command -v yum &> /dev/null; then
-        updates=$(yum check-update)
-        log_and_print "$updates"
-        log_and_print "\n→ Total upgradable packages (if listed): $(echo "$updates" | grep -c '^')"
+# Network Security
+audit_network() {
+    section_header "NETWORK SECURITY"
+    
+    # Check listening ports
+    log "INFO" "Checking listening ports..."
+    netstat -tuln | grep LISTEN | while read -r line; do
+        log "INFO" "Open port: $line"
+    done
+    
+    # Check firewall status
+    log "INFO" "Checking firewall status..."
+    if command -v ufw >/dev/null 2>&1; then
+        if ufw status | grep -q "Status: active"; then
+            log "SUCCESS" "UFW is active"
+        else
+            log "ERROR" "UFW is not active"
+        fi
+    elif command -v iptables >/dev/null 2>&1; then
+        if iptables -L | grep -q "Chain"; then
+            log "SUCCESS" "IPTables rules exist"
+        else
+            log "ERROR" "No IPTables rules found"
+        fi
+    else
+        log "ERROR" "No firewall found"
     fi
 }
 
-# 7. Log Monitoring
-log_monitor() {
-    print_title "7. LOGIN ATTEMPTS & AUTH LOGS"
-
-    section "Recent Failed Login Attempts"
-    failed=$(grep "Failed password" /var/log/auth.log | tail -n 10)
-    log_and_print "$failed"
-    log_and_print "\n→ Total recent failed logins shown: $(echo "$failed" | grep -c 'Failed')"
+# Service Security
+audit_services() {
+    section_header "SERVICE SECURITY"
+    
+    for service in "${IMPORTANT_SERVICES[@]}"; do
+        if systemctl is-active "$service" >/dev/null 2>&1; then
+            log "SUCCESS" "Service $service is running"
+        else
+            log "WARNING" "Service $service is not running"
+        fi
+    done
 }
 
-# 8. Server Hardening
-server_hardening() {
-    print_title "8. SERVER HARDENING"
-
-    section "SSH Configuration (Root login/password auth disabled)"
-    sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-    systemctl reload sshd
-    log_and_print "→ Updated sshd_config to disable root login and password authentication."
-
-    section "Disabling IPv6"
-    echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
-    echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-    reload=$(sysctl -p)
-    log_and_print "$reload"
-
-    section "Bootloader Security Check"
-    log_and_print "Manual verification recommended for /boot/grub/grub.cfg permissions."
+# System Updates
+check_updates() {
+    section_header "SYSTEM UPDATES"
+    
+    if command -v apt-get >/dev/null 2>&1; then
+        log "INFO" "Checking for updates (Debian/Ubuntu)..."
+        apt-get update >/dev/null 2>&1
+        local updates=$(apt-get -s upgrade | grep -P "^Inst" | wc -l)
+        log "INFO" "$updates updates available"
+    elif command -v yum >/dev/null 2>&1; then
+        log "INFO" "Checking for updates (RHEL/CentOS)..."
+        local updates=$(yum check-update --quiet | grep -v "^$" | wc -l)
+        log "INFO" "$updates updates available"
+    fi
 }
 
-# 9. Custom Checks Placeholder
-custom_checks() {
-    print_title "9. CUSTOM CHECKS"
-    log_and_print "You can extend this section for application-specific security checks."
+# IP Configuration
+check_ip_config() {
+    section_header "IP CONFIGURATION"
+    
+    log "INFO" "Checking IP addresses..."
+    ip addr show | grep "inet " | while read -r line; do
+        local ip=$(echo "$line" | awk '{print $2}')
+        if [[ $ip =~ ^(192\.168|10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.) ]]; then
+            log "INFO" "Private IP found: $ip"
+        else
+            log "WARNING" "Public IP found: $ip"
+        fi
+    done
 }
 
-# 10. Summary
-summary() {
-    print_title "10. AUDIT COMPLETED"
-    log_and_print "Complete report saved to: $REPORT"
-}
-
-# Main
+# Main execution
 main() {
-    clear
-    echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
-    user_audit
-    file_permission_audit
-    service_audit
-    firewall_audit
-    ip_check
-    update_check
-    log_monitor
-    server_hardening
-    custom_checks
-    summary
+    check_root
+    
+    log "INFO" "Starting security audit..."
+    date "+%Y-%m-%d %H:%M:%S" >> "$REPORT"
+    
+    audit_users
+    audit_filesystem
+    audit_network
+    audit_services
+    check_updates
+    check_ip_config
+    
+    log "SUCCESS" "Security audit completed. Report saved to $REPORT"
 }
 
-main
+main "$@"
