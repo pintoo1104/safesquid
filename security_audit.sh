@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # Secure error handling
-#set -euo pipefail
+set -euo pipefail
 IFS=$'\n\t'
 
 # Configuration
 REPORT="security_audit_report.txt"
 IMPORTANT_SERVICES=("sshd" "iptables" "ufw" "nginx" "apache2")
+ADMIN_EMAIL="admin@example.com"
 
 # Colors
 RED='\033[0;31m'
@@ -39,7 +40,7 @@ section() {
 # Root user check
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
-        echo "This script must be run as root!"
+        log "ERROR" "This script must be run as root!"
         exit 1
     fi
 }
@@ -89,7 +90,7 @@ audit_services() {
     done
 }
 
-# Network Security
+# Firewall and Network Security
 audit_network() {
     section "Firewall & Network Security"
 
@@ -133,7 +134,7 @@ check_ip_config() {
     done
 }
 
-# Updates
+# Security Updates
 check_updates() {
     section "Security Updates"
 
@@ -178,34 +179,20 @@ disable_ipv6() {
 # GRUB Hardening (bootloader)
 secure_grub() {
     section "Bootloader Hardening"
-
-    # Check if grub-mkpasswd-pbkdf2 is available
-    if ! command -v grub-mkpasswd-pbkdf2 &>/dev/null; then
-        log "ERROR" "grub-mkpasswd-pbkdf2 command not found. Please install it to proceed."
-        exit 1
-    fi
-
-    # Generate password hash
-    PASSWORD_HASH=$(grub-mkpasswd-pbkdf2 | grep 'PBKDF2' | awk '{print $7}')
-    
-    if [[ -z "$PASSWORD_HASH" ]]; then
-        log "ERROR" "Failed to generate GRUB password hash."
-        exit 1
-    fi
-
     GRUB_FILE="/etc/grub.d/40_custom"
-    
-    # Backup the current GRUB file
-    cp "$GRUB_FILE" "$GRUB_FILE.bak"
-    
-    # Append password protection settings to the GRUB file
+    PASSWORD_HASH=$(grub-mkpasswd-pbkdf2 | grep 'PBKDF2' | awk '{print $7}')
     echo "set superuser=\"admin\"" >> "$GRUB_FILE"
     echo "password_pbkdf2 admin $PASSWORD_HASH" >> "$GRUB_FILE"
-
-    # Update GRUB configuration
     update-grub
-    
-    log "SUCCESS" "GRUB password set and configuration updated."
+    log "SUCCESS" "GRUB password set"
+}
+
+# Automatic Updates
+configure_auto_updates() {
+    section "Automatic Updates"
+    apt-get install -y unattended-upgrades
+    dpkg-reconfigure --priority=low unattended-upgrades
+    log "SUCCESS" "Automatic updates configured"
 }
 
 # Main
@@ -222,7 +209,8 @@ main() {
     check_updates
     harden_ssh
     disable_ipv6
-    secure_grub   # Uncomment if GRUB password hardening is required
+    configure_auto_updates
+    secure_grub
 
     log "SUCCESS" "Security audit and hardening complete. Report saved to $REPORT"
 }
