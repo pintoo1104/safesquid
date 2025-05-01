@@ -1,227 +1,180 @@
 #!/bin/bash
 
-# Secure error handling
-set -euo pipefail
-IFS=$'\n\t'
-
-# Configuration
-REPORT="security_audit_report.txt"
-IMPORTANT_SERVICES=("sshd" "iptables" "ufw" "nginx" "apache2")
-ADMIN_EMAIL="admin@example.com"
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-# Logging
+# Function to print headers in the log
 log() {
     local level="$1"
     local message="$2"
-    local color="$NC"
-    case "$level" in
-        INFO) color="$BLUE" ;;
-        WARNING) color="$YELLOW" ;;
-        ERROR) color="$RED" ;;
-        SUCCESS) color="$GREEN" ;;
-    esac
-    echo -e "${color}[$level] $message${NC}"
-    echo "[$level] $message" >> "$REPORT"
+    echo "[$(date)] [$level] $message"
 }
 
-# Section header
+# Function to print section headers in the log
 section() {
-    local title="$1"
-    echo -e "\n${BLUE}========== $title ==========${NC}\n" | tee -a "$REPORT"
+    local section_name="$1"
+    log "INFO" "========== $section_name =========="
 }
 
-# Root user check
-check_root() {
-    if [[ "$EUID" -ne 0 ]]; then
-        log "ERROR" "This script must be run as root!"
-        exit 1
-    fi
-}
-
-# User and Group Audit
-audit_users() {
-    section "User and Group Audit"
+# User and Group Audits
+user_group_audit() {
+    section "User and Group Audits"
     
-    log "INFO" "Users with UID 0:"
-    awk -F: '$3 == 0 {print $1}' /etc/passwd | tee -a "$REPORT"
+    # List all users and groups
+    log "INFO" "Listing all users and groups..."
+    cat /etc/passwd
 
-    log "INFO" "Users with no/locked passwords:"
-    awk -F: '($2 == "" || $2 ~ /^[*!]/) {print $1}' /etc/shadow | tee -a "$REPORT"
+    # Check for users with UID 0 (root privileges) and report any non-standard users
+    log "INFO" "Checking for users with UID 0 (root privileges)..."
+    awk -F: '$3 == 0 {print $1}' /etc/passwd
 
-    log "INFO" "Users in sudo group:"
-    getent group sudo | awk -F: '{print $4}' | tr ',' '\n' | tee -a "$REPORT"
+    # Identify and report any users without passwords or with weak passwords
+    log "INFO" "Checking for users without passwords..."
+    awk -F: '($2 == "" || $2 == "x") {print $1}' /etc/passwd
 }
 
-# Filesystem permissions
-audit_filesystem() {
-    section "Filesystem Security"
+# File and Directory Permissions
+file_permissions() {
+    section "File and Directory Permissions"
+    
+    # Scan for files and directories with world-writable permissions
+    log "INFO" "Scanning for world-writable files..."
+    find / -type f -perm -0002 -exec ls -l {} \;
 
-    log "INFO" "World-writable files:"
-    find / -type f -perm -0002 -not -path "/proc/*" 2>/dev/null | tee -a "$REPORT"
+    # Check for the presence of .ssh directories and ensure they have secure permissions
+    log "INFO" "Checking .ssh directories for secure permissions..."
+    find / -type d -name ".ssh" -exec ls -ld {} \;
 
-    log "INFO" "SUID/SGID files:"
-    find / -type f \( -perm -4000 -o -perm -2000 \) -not -path "/proc/*" 2>/dev/null | tee -a "$REPORT"
-
-    log "INFO" "Checking .ssh directory permissions:"
-    find /home -type d -name ".ssh" 2>/dev/null | while read dir; do
-        perms=$(stat -c %a "$dir")
-        if [[ "$perms" != "700" ]]; then
-            log "WARNING" "$dir has insecure permissions: $perms"
-        fi
-    done
+    # Report any files with SUID or SGID bits set
+    log "INFO" "Checking for SUID/SGID files..."
+    find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -l {} \;
 }
 
-# Services
-audit_services() {
-    section "Service Audit"
-    for svc in "${IMPORTANT_SERVICES[@]}"; do
-        if systemctl is-active --quiet "$svc"; then
-            log "SUCCESS" "$svc is running"
-        else
-            log "WARNING" "$svc is NOT running"
-        fi
-    done
+# Service Audits
+service_audit() {
+    section "Service Audits"
+    
+    # List all running services and check for any unauthorized services
+    log "INFO" "Listing all running services..."
+    systemctl list-units --type=service --state=running
+
+    # Ensure critical services are running (e.g., sshd, iptables)
+    log "INFO" "Checking critical services (sshd, iptables)..."
+    systemctl is-active sshd
+    systemctl is-active iptables
 }
 
 # Firewall and Network Security
-audit_network() {
-    section "Firewall & Network Security"
+firewall_network_security() {
+    section "Firewall and Network Security"
+    
+    # Verify that a firewall (e.g., iptables, ufw) is active and configured
+    log "INFO" "Checking if firewall is active..."
+    systemctl is-active ufw || systemctl is-active iptables
 
-    log "INFO" "Open ports:"
-    if command -v ss &>/dev/null; then
-        ss -tuln | grep LISTEN | tee -a "$REPORT"
-    elif command -v netstat &>/dev/null; then
-        netstat -tuln | grep LISTEN | tee -a "$REPORT"
-    else
-        log "ERROR" "Neither ss nor netstat found"
-    fi
+    # Report any open ports and their associated services
+    log "INFO" "Listing open ports..."
+    ss -tuln
 
-    log "INFO" "Firewall rules:"
-    if command -v ufw &>/dev/null; then
-        ufw status verbose | tee -a "$REPORT"
-    elif command -v iptables &>/dev/null; then
-        iptables -L -n -v | tee -a "$REPORT"
-    else
-        log "ERROR" "No firewall tool found"
-    fi
-
-    log "INFO" "Checking IP forwarding:"
-    if [[ "$(sysctl -n net.ipv4.ip_forward)" == "1" ]]; then
-        log "WARNING" "IPv4 forwarding is ENABLED"
-    else
-        log "SUCCESS" "IPv4 forwarding is DISABLED"
-    fi
+    # Check for any IP forwarding or insecure network configurations
+    log "INFO" "Checking for IP forwarding..."
+    sysctl net.ipv4.ip_forward
 }
 
-# IP Configuration
-check_ip_config() {
-    section "IP Configuration"
-
+# Public vs. Private IP Checks
+public_private_ip_check() {
+    section "IP and Network Configuration Checks"
+    
+    # Identify whether the server’s IP addresses are public or private
+    log "INFO" "Identifying public and private IPs..."
     ip -o -4 addr show | awk '{print $2, $4}' | while read iface ip; do
-        ip_addr="${ip%%/*}"
-        if [[ "$ip_addr" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])) ]]; then
-            log "INFO" "Private IP on $iface: $ip_addr"
+        if [[ "$ip" =~ ^10\.|^172\.16\..*|^192\.168\..* ]]; then
+            log "INFO" "$iface: Private IP - $ip"
         else
-            log "WARNING" "Public IP on $iface: $ip_addr"
+            log "INFO" "$iface: Public IP - $ip"
         fi
     done
 }
 
-# Security Updates
-check_updates() {
-    section "Security Updates"
+# Security Updates and Patching
+security_updates() {
+    section "Security Updates and Patching"
+    
+    # Check for available security updates
+    log "INFO" "Checking for available security updates..."
+    apt update && apt list --upgradable
 
-    if command -v apt &>/dev/null; then
-        apt update -qq
-        apt list --upgradable 2>/dev/null | grep -v "Listing..." | tee -a "$REPORT"
-    elif command -v yum &>/dev/null; then
-        yum check-update | tee -a "$REPORT"
-    else
-        log "ERROR" "Package manager not supported"
-    fi
+    # Ensure unattended-upgrades is configured for security updates
+    log "INFO" "Checking if unattended-upgrades is enabled..."
+    dpkg-query -l | grep unattended-upgrades
 }
 
-# SSH Hardening
-harden_ssh() {
-    section "SSH Hardening"
-
-    SSH_CONF="/etc/ssh/sshd_config"
-    if [[ -f "$SSH_CONF" ]]; then
-        sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' "$SSH_CONF"
-        sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' "$SSH_CONF"
-        systemctl restart sshd
-        log "SUCCESS" "SSH root login and password auth disabled"
-    else
-        log "ERROR" "SSH config file not found"
-    fi
+# Log Monitoring
+log_monitoring() {
+    section "Log Monitoring"
+    
+    # Check for suspicious log entries
+    log "INFO" "Checking for suspicious log entries..."
+    grep "Failed password" /var/log/auth.log
 }
 
-# Disable IPv6 (optional)
-disable_ipv6() {
-    section "IPv6 Disable Check"
-    if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "1" ]]; then
-        log "SUCCESS" "IPv6 already disabled"
-    else
-        echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
-        echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-        sysctl -p
-        log "SUCCESS" "IPv6 disabled"
-    fi
+# SSH Configuration
+ssh_configuration() {
+    section "SSH Configuration"
+    
+    # Implement SSH key-based authentication and disable password-based login for root
+    log "INFO" "Configuring SSH for key-based authentication and disabling password login for root..."
+    sed -i 's/^PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+    systemctl restart sshd
 }
 
-# GRUB Hardening (bootloader)
+# Bootloader Hardening
 secure_grub() {
     section "Bootloader Hardening"
-    GRUB_FILE="/etc/grub.d/40_custom"
-    PASSWORD_HASH=$(grub-mkpasswd-pbkdf2 | grep 'PBKDF2' | awk '{print $7}')
     
-    # Ensure no interaction during the process
+    # Ensure a strong password is used (prompting for one if needed)
+    read -sp "Enter password for GRUB bootloader: " grub_password
+    echo
+
+    # Generate PBKDF2 password hash for GRUB
+    PASSWORD_HASH=$(grub-mkpasswd-pbkdf2 <<< "$grub_password" | grep 'PBKDF2' | awk '{print $7}')
+
+    # Add password to GRUB configuration
+    GRUB_FILE="/etc/grub.d/40_custom"
+    
+    # Add password hash to the grub configuration to secure bootloader
     echo "set superuser=\"admin\"" >> "$GRUB_FILE"
     echo "password_pbkdf2 admin $PASSWORD_HASH" >> "$GRUB_FILE"
-    
-    # Update grub configuration without user interaction
+
+    # Update GRUB to apply changes
     export DEBIAN_FRONTEND=noninteractive
     update-grub || log "ERROR" "Failed to update GRUB configuration"
 
     log "SUCCESS" "GRUB password set and bootloader secured"
 }
 
-# Automatic Updates
-configure_auto_updates() {
+# Automatic Updates Configuration
+automatic_updates() {
     section "Automatic Updates"
     
-    # Ensure no prompt and complete installation of unattended-upgrades
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y unattended-upgrades
+    # Configure unattended-upgrades to automatically apply security updates
+    log "INFO" "Configuring unattended-upgrades for automatic security updates..."
+    apt install unattended-upgrades -y
     dpkg-reconfigure --priority=low unattended-upgrades
-    log "SUCCESS" "Automatic updates configured"
 }
 
-# Main
+# Main function to execute the checks and harden the server
 main() {
-    check_root
-    echo "" > "$REPORT"
-    log "INFO" "Starting audit on $(hostname) at $(date)"
-
-    audit_users
-    audit_filesystem
-    audit_services
-    audit_network
-    check_ip_config
-    check_updates
-    harden_ssh
-    disable_ipv6
-    configure_auto_updates
+    # Run all the functions
+    user_group_audit
+    file_permissions
+    service_audit
+    firewall_network_security
+    public_private_ip_check
+    security_updates
+    log_monitoring
+    ssh_configuration
     secure_grub
-
-    log "SUCCESS" "Security audit and hardening complete. Report saved to $REPORT"
+    automatic_updates
 }
 
+# Run the main function
 main
