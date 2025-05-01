@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Secure error handling
-#set -euo pipefail
+set -euo pipefail
 IFS=$'\n\t'
 
 # Configuration
 REPORT="security_audit_report.txt"
 IMPORTANT_SERVICES=("sshd" "iptables" "ufw" "nginx" "apache2")
-CUSTOM_CHECKS=("check_1" "check_2")  # Custom checks can be added here
+EMAIL_NOTIFICATION="your-email@example.com"  # Set this for email alerts if needed
 
 # Colors
 RED='\033[0;31m'
@@ -31,16 +31,16 @@ log() {
     echo "[$level] $message" >> "$REPORT"
 }
 
-# Section header for reporting
+# Section header
 section() {
     local title="$1"
     echo -e "\n${BLUE}========== $title ==========${NC}\n" | tee -a "$REPORT"
 }
 
-# Check if script is run as root
+# Root user check
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
-        log "ERROR" "This script must be run as root!"
+        echo "This script must be run as root!"
         exit 1
     fi
 }
@@ -48,18 +48,18 @@ check_root() {
 # User and Group Audit
 audit_users() {
     section "User and Group Audit"
-    
-    log "INFO" "Users and Groups on the system:"
-    cat /etc/passwd | tee -a "$REPORT"
-    
-    log "INFO" "Users with UID 0 (root privileges):"
+
+    log "INFO" "Users with UID 0:"
     awk -F: '$3 == 0 {print $1}' /etc/passwd | tee -a "$REPORT"
-    
-    log "INFO" "Users with no password or weak passwords:"
+
+    log "INFO" "Users with no/locked passwords:"
     awk -F: '($2 == "" || $2 ~ /^[*!]/) {print $1}' /etc/shadow | tee -a "$REPORT"
+
+    log "INFO" "Users in sudo group:"
+    getent group sudo | awk -F: '{print $4}' | tr ',' '\n' | tee -a "$REPORT"
 }
 
-# Filesystem Permissions Audit
+# Filesystem permissions
 audit_filesystem() {
     section "Filesystem Security"
 
@@ -78,7 +78,7 @@ audit_filesystem() {
     done
 }
 
-# Service Audit (Checking critical services)
+# Services Audit
 audit_services() {
     section "Service Audit"
     for svc in "${IMPORTANT_SERVICES[@]}"; do
@@ -90,7 +90,7 @@ audit_services() {
     done
 }
 
-# Network and Firewall Security Audit
+# Network Security
 audit_network() {
     section "Firewall & Network Security"
 
@@ -120,7 +120,7 @@ audit_network() {
     fi
 }
 
-# IP Configuration (Public vs Private IP)
+# IP Configuration (Public vs Private IPs)
 check_ip_config() {
     section "IP Configuration"
 
@@ -139,7 +139,7 @@ check_updates() {
     section "Security Updates"
 
     if command -v apt &>/dev/null; then
-        apt update -qq
+        apt update -q -y  # Update without interaction
         apt list --upgradable 2>/dev/null | grep -v "Listing..." | tee -a "$REPORT"
     elif command -v yum &>/dev/null; then
         yum check-update | tee -a "$REPORT"
@@ -148,7 +148,7 @@ check_updates() {
     fi
 }
 
-# SSH Hardening
+# SSH Hardening (disable password-based login for root)
 harden_ssh() {
     section "SSH Hardening"
 
@@ -163,7 +163,7 @@ harden_ssh() {
     fi
 }
 
-# Disable IPv6
+# Disable IPv6 (optional)
 disable_ipv6() {
     section "IPv6 Disable Check"
     if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "1" ]]; then
@@ -176,7 +176,7 @@ disable_ipv6() {
     fi
 }
 
-# GRUB Hardening (Set Bootloader password)
+# GRUB Hardening (bootloader password)
 secure_grub() {
     section "Bootloader Hardening"
     GRUB_FILE="/etc/grub.d/40_custom"
@@ -187,19 +187,20 @@ secure_grub() {
     log "SUCCESS" "GRUB password set"
 }
 
-# Automatic Updates (unattended-upgrades)
+# Configure Automatic Updates
 configure_automatic_updates() {
     section "Automatic Updates"
     if command -v apt &>/dev/null; then
-        apt install -y unattended-upgrades
-        dpkg-reconfigure --priority=low unattended-upgrades
+        apt update -q -y  # Update without interaction
+        apt install -y unattended-upgrades  # Install unattended-upgrades silently
+        dpkg-reconfigure --priority=low unattended-upgrades  # Configure non-interactively
         log "SUCCESS" "Automatic security updates configured"
     else
         log "ERROR" "Unsupported package manager for automatic updates"
     fi
 }
 
-# Main function to run all checks
+# Main function to execute all checks and hardening
 main() {
     check_root
     echo "" > "$REPORT"
@@ -213,7 +214,7 @@ main() {
     check_updates
     harden_ssh
     disable_ipv6
-    # secure_grub   # Uncomment if GRUB password hardening is required
+    secure_grub  # Uncomment if GRUB password hardening is required
     configure_automatic_updates
 
     log "SUCCESS" "Security audit and hardening complete. Report saved to $REPORT"
