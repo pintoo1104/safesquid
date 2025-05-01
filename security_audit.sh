@@ -1,13 +1,12 @@
 #!/bin/bash
 
 # Secure error handling
-set -euo pipefail
+#set -euo pipefail
 IFS=$'\n\t'
 
 # Configuration
 REPORT="security_audit_report.txt"
 IMPORTANT_SERVICES=("sshd" "iptables" "ufw" "nginx" "apache2")
-EMAIL_NOTIFICATION="your-email@example.com"  # Set this for email alerts if needed
 
 # Colors
 RED='\033[0;31m'
@@ -16,7 +15,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Logging function
+# Logging
 log() {
     local level="$1"
     local message="$2"
@@ -48,7 +47,7 @@ check_root() {
 # User and Group Audit
 audit_users() {
     section "User and Group Audit"
-
+    
     log "INFO" "Users with UID 0:"
     awk -F: '$3 == 0 {print $1}' /etc/passwd | tee -a "$REPORT"
 
@@ -78,7 +77,7 @@ audit_filesystem() {
     done
 }
 
-# Services Audit
+# Services
 audit_services() {
     section "Service Audit"
     for svc in "${IMPORTANT_SERVICES[@]}"; do
@@ -120,7 +119,7 @@ audit_network() {
     fi
 }
 
-# IP Configuration (Public vs Private IPs)
+# IP Configuration
 check_ip_config() {
     section "IP Configuration"
 
@@ -134,12 +133,12 @@ check_ip_config() {
     done
 }
 
-# Security Updates
+# Updates
 check_updates() {
     section "Security Updates"
 
     if command -v apt &>/dev/null; then
-        apt update -q -y  # Update without interaction
+        apt update -qq
         apt list --upgradable 2>/dev/null | grep -v "Listing..." | tee -a "$REPORT"
     elif command -v yum &>/dev/null; then
         yum check-update | tee -a "$REPORT"
@@ -148,7 +147,7 @@ check_updates() {
     fi
 }
 
-# SSH Hardening (disable password-based login for root)
+# SSH Hardening
 harden_ssh() {
     section "SSH Hardening"
 
@@ -176,35 +175,44 @@ disable_ipv6() {
     fi
 }
 
-# GRUB Hardening (bootloader password)
+# GRUB Hardening (bootloader)
 secure_grub() {
     section "Bootloader Hardening"
-    GRUB_FILE="/etc/grub.d/40_custom"
+
+    # Check if grub-mkpasswd-pbkdf2 is available
+    if ! command -v grub-mkpasswd-pbkdf2 &>/dev/null; then
+        log "ERROR" "grub-mkpasswd-pbkdf2 command not found. Please install it to proceed."
+        exit 1
+    fi
+
+    # Generate password hash
     PASSWORD_HASH=$(grub-mkpasswd-pbkdf2 | grep 'PBKDF2' | awk '{print $7}')
+    
+    if [[ -z "$PASSWORD_HASH" ]]; then
+        log "ERROR" "Failed to generate GRUB password hash."
+        exit 1
+    fi
+
+    GRUB_FILE="/etc/grub.d/40_custom"
+    
+    # Backup the current GRUB file
+    cp "$GRUB_FILE" "$GRUB_FILE.bak"
+    
+    # Append password protection settings to the GRUB file
     echo "set superuser=\"admin\"" >> "$GRUB_FILE"
     echo "password_pbkdf2 admin $PASSWORD_HASH" >> "$GRUB_FILE"
+
+    # Update GRUB configuration
     update-grub
-    log "SUCCESS" "GRUB password set"
+    
+    log "SUCCESS" "GRUB password set and configuration updated."
 }
 
-# Configure Automatic Updates
-configure_automatic_updates() {
-    section "Automatic Updates"
-    if command -v apt &>/dev/null; then
-        apt update -q -y  # Update without interaction
-        apt install -y unattended-upgrades  # Install unattended-upgrades silently
-        dpkg-reconfigure --priority=low unattended-upgrades  # Configure non-interactively
-        log "SUCCESS" "Automatic security updates configured"
-    else
-        log "ERROR" "Unsupported package manager for automatic updates"
-    fi
-}
-
-# Main function to execute all checks and hardening
+# Main
 main() {
     check_root
     echo "" > "$REPORT"
-    log "INFO" "Starting security audit on $(hostname) at $(date)"
+    log "INFO" "Starting audit on $(hostname) at $(date)"
 
     audit_users
     audit_filesystem
@@ -214,8 +222,7 @@ main() {
     check_updates
     harden_ssh
     disable_ipv6
-    secure_grub  # Uncomment if GRUB password hardening is required
-    configure_automatic_updates
+    secure_grub   # Uncomment if GRUB password hardening is required
 
     log "SUCCESS" "Security audit and hardening complete. Report saved to $REPORT"
 }
