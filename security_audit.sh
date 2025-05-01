@@ -7,6 +7,7 @@ IFS=$'\n\t'
 # Configuration
 REPORT="security_audit_report.txt"
 IMPORTANT_SERVICES=("sshd" "iptables" "ufw" "nginx" "apache2")
+CUSTOM_CHECKS=("check_1" "check_2")  # Custom checks can be added here
 
 # Colors
 RED='\033[0;31m'
@@ -15,7 +16,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Logging
+# Logging function
 log() {
     local level="$1"
     local message="$2"
@@ -30,16 +31,16 @@ log() {
     echo "[$level] $message" >> "$REPORT"
 }
 
-# Section header
+# Section header for reporting
 section() {
     local title="$1"
     echo -e "\n${BLUE}========== $title ==========${NC}\n" | tee -a "$REPORT"
 }
 
-# Root user check
+# Check if script is run as root
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
-        echo "This script must be run as root!"
+        log "ERROR" "This script must be run as root!"
         exit 1
     fi
 }
@@ -48,17 +49,17 @@ check_root() {
 audit_users() {
     section "User and Group Audit"
     
-    log "INFO" "Users with UID 0:"
+    log "INFO" "Users and Groups on the system:"
+    cat /etc/passwd | tee -a "$REPORT"
+    
+    log "INFO" "Users with UID 0 (root privileges):"
     awk -F: '$3 == 0 {print $1}' /etc/passwd | tee -a "$REPORT"
-
-    log "INFO" "Users with no/locked passwords:"
+    
+    log "INFO" "Users with no password or weak passwords:"
     awk -F: '($2 == "" || $2 ~ /^[*!]/) {print $1}' /etc/shadow | tee -a "$REPORT"
-
-    log "INFO" "Users in sudo group:"
-    getent group sudo | awk -F: '{print $4}' | tr ',' '\n' | tee -a "$REPORT"
 }
 
-# Filesystem permissions
+# Filesystem Permissions Audit
 audit_filesystem() {
     section "Filesystem Security"
 
@@ -77,7 +78,7 @@ audit_filesystem() {
     done
 }
 
-# Services
+# Service Audit (Checking critical services)
 audit_services() {
     section "Service Audit"
     for svc in "${IMPORTANT_SERVICES[@]}"; do
@@ -89,7 +90,7 @@ audit_services() {
     done
 }
 
-# Network Security
+# Network and Firewall Security Audit
 audit_network() {
     section "Firewall & Network Security"
 
@@ -119,7 +120,7 @@ audit_network() {
     fi
 }
 
-# IP Configuration
+# IP Configuration (Public vs Private IP)
 check_ip_config() {
     section "IP Configuration"
 
@@ -133,7 +134,7 @@ check_ip_config() {
     done
 }
 
-# Updates
+# Security Updates
 check_updates() {
     section "Security Updates"
 
@@ -162,7 +163,7 @@ harden_ssh() {
     fi
 }
 
-# Disable IPv6 (optional)
+# Disable IPv6
 disable_ipv6() {
     section "IPv6 Disable Check"
     if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "1" ]]; then
@@ -175,7 +176,7 @@ disable_ipv6() {
     fi
 }
 
-# GRUB Hardening (bootloader)
+# GRUB Hardening (Set Bootloader password)
 secure_grub() {
     section "Bootloader Hardening"
     GRUB_FILE="/etc/grub.d/40_custom"
@@ -186,11 +187,23 @@ secure_grub() {
     log "SUCCESS" "GRUB password set"
 }
 
-# Main
+# Automatic Updates (unattended-upgrades)
+configure_automatic_updates() {
+    section "Automatic Updates"
+    if command -v apt &>/dev/null; then
+        apt install -y unattended-upgrades
+        dpkg-reconfigure --priority=low unattended-upgrades
+        log "SUCCESS" "Automatic security updates configured"
+    else
+        log "ERROR" "Unsupported package manager for automatic updates"
+    fi
+}
+
+# Main function to run all checks
 main() {
     check_root
     echo "" > "$REPORT"
-    log "INFO" "Starting audit on $(hostname) at $(date)"
+    log "INFO" "Starting security audit on $(hostname) at $(date)"
 
     audit_users
     audit_filesystem
@@ -200,7 +213,8 @@ main() {
     check_updates
     harden_ssh
     disable_ipv6
-    #secure_grub   # Uncomment if GRUB password hardening is required
+    # secure_grub   # Uncomment if GRUB password hardening is required
+    configure_automatic_updates
 
     log "SUCCESS" "Security audit and hardening complete. Report saved to $REPORT"
 }
