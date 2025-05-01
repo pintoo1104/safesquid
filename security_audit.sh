@@ -181,15 +181,24 @@ secure_grub() {
     section "Bootloader Hardening"
     GRUB_FILE="/etc/grub.d/40_custom"
     PASSWORD_HASH=$(grub-mkpasswd-pbkdf2 | grep 'PBKDF2' | awk '{print $7}')
+    
+    # Ensure no interaction during the process
     echo "set superuser=\"admin\"" >> "$GRUB_FILE"
     echo "password_pbkdf2 admin $PASSWORD_HASH" >> "$GRUB_FILE"
-    update-grub
-    log "SUCCESS" "GRUB password set"
+    
+    # Update grub configuration without user interaction
+    export DEBIAN_FRONTEND=noninteractive
+    update-grub || log "ERROR" "Failed to update GRUB configuration"
+
+    log "SUCCESS" "GRUB password set and bootloader secured"
 }
 
 # Automatic Updates
 configure_auto_updates() {
     section "Automatic Updates"
+    
+    # Ensure no prompt and complete installation of unattended-upgrades
+    export DEBIAN_FRONTEND=noninteractive
     apt-get install -y unattended-upgrades
     dpkg-reconfigure --priority=low unattended-upgrades
     log "SUCCESS" "Automatic updates configured"
