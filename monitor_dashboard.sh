@@ -10,19 +10,16 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 RESET='\033[0m'  # Reset color
 
+# Function to draw the border
 draw_box() {
   echo -e "${BLUE}+$(printf -- '-%.0s' $(seq 1 $1))+$RESET"
 }
 
+# Function to draw the section title and box
 draw_section() {
   local section_title="$1"
-
-  # Use echo -e to interpret color codes
   echo -e "${BLUE}$(draw_box 60)${RESET}"
-
-  # Print the title with proper formatting
-  printf "| ${GREEN}%-58s${RESET} |\n" "$section_title"
-  
+  echo -e "| ${GREEN}$(printf '%-58s' "$section_title")${RESET} |"
   echo -e "${BLUE}$(draw_box 60)${RESET}"
 }
 
@@ -30,14 +27,12 @@ draw_section() {
 get_memory_usage() {
   read -r mem_total mem_used <<< $(free -m | awk '/Mem:/ {print $2, $3}')
   
-  # Validate values
   if ! [[ "$mem_total" =~ ^[0-9]+$ ]] || ! [[ "$mem_used" =~ ^[0-9]+$ ]]; then
     echo -e "${RED}Error: Invalid memory values or free command failed${RESET}"
     return 1
   fi
 
   mem_percent=$((mem_used * 100 / mem_total))
-
   swap_info=$(free -h | awk '/Swap:/ {print $3 " / " $2}')
   
   printf "| ${YELLOW}Memory:${RESET}    [%-10s] %2d%%   ${YELLOW}Swap:${RESET} %s |\n" "$(printf '#%.0s' $(seq 1 $((mem_percent / 10))))" "$mem_percent" "$swap_info"
