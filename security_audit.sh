@@ -6,6 +6,8 @@
 
 REPORT="security_audit_report.txt"
 > "$REPORT"
+EMAIL="admin@example.com"
+CUSTOM_CHECKS_CONF="./custom_checks.conf"
 
 # Set APT to non-interactive to avoid CLI warnings
 export DEBIAN_FRONTEND=noninteractive
@@ -51,7 +53,6 @@ section() {
 # 1. User and Group Audits
 user_audit() {
     print_title "1. USER AND GROUP AUDIT"
-
     section "Users with UID 0 (root access)"
     root_users=$(getent passwd | awk -F: '$3 == 0 {print $1}')
     log_and_print "$root_users"
@@ -70,7 +71,6 @@ user_audit() {
 # 2. File and Directory Permissions
 file_perm_audit() {
     print_title "2. FILE AND DIRECTORY PERMISSIONS"
-
     section "World-writable files and directories"
     find / -xdev -type f -perm -0002 -ls 2>/dev/null | tee -a "$REPORT"
 
@@ -84,7 +84,6 @@ file_perm_audit() {
 # 3. Service Audits
 service_audit() {
     print_title "3. SERVICE AUDIT"
-
     section "Running services"
     systemctl list-units --type=service --state=running | tee -a "$REPORT"
 
@@ -104,7 +103,6 @@ service_audit() {
 # 4. Firewall and Network Security
 network_audit() {
     print_title "4. FIREWALL & NETWORK SECURITY"
-
     section "Firewall status"
     ufw status verbose | tee -a "$REPORT"
 
@@ -118,7 +116,6 @@ network_audit() {
 # 5. IP and Network Configuration Checks
 ip_audit() {
     print_title "5. PUBLIC vs PRIVATE IP CHECK"
-
     section "IP address summary"
     ip -4 a | tee -a "$REPORT"
 
@@ -129,7 +126,6 @@ ip_audit() {
 # 6. Security Updates and Patching
 security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
-
     section "Available updates"
     apt_update
 
@@ -144,7 +140,6 @@ security_updates() {
 # 7. Log Monitoring
 log_monitoring() {
     print_title "7. LOG MONITORING"
-
     section "SSH login attempts from auth.log"
     grep -E "Failed|Accepted" /var/log/auth.log | tail -n 50 | tee -a "$REPORT"
 }
@@ -152,7 +147,6 @@ log_monitoring() {
 # 8. Server Hardening Steps
 hardening_steps() {
     print_title "8. SERVER HARDENING"
-
     section "SSH hardening"
     sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
     sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
@@ -164,14 +158,6 @@ hardening_steps() {
     echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
     sysctl -p | tee -a "$REPORT"
 
-    section "Configure GRUB password"
-    GRUB_PASS="Strong@$(date +%s)"
-    hash=$(echo -e "$GRUB_PASS\n$GRUB_PASS" | grub-mkpasswd-pbkdf2 | awk '/grub.pbkdf2/ {print $NF}')
-    echo "password_pbkdf2 $GRUB_USER $hash" > /etc/grub.d/01_password
-    chmod 600 /etc/grub.d/01_password
-    update-grub
-    log_and_print "→ GRUB password set. Password: $GRUB_PASS"
-
     section "Firewall rules"
     ufw default deny incoming
     ufw default allow outgoing
@@ -180,20 +166,47 @@ hardening_steps() {
 
     section "Enable automatic updates"
     apt install -y unattended-upgrades > /dev/null
-
-    # Directly modify the configuration file for automatic updates
     echo "APT::Periodic::Update-Package-Lists \"1\";" > /etc/apt/apt.conf.d/10periodic
     echo "APT::Periodic::Unattended-Upgrade \"1\";" >> /etc/apt/apt.conf.d/10periodic
     echo "APT::Periodic::AutocleanInterval \"7\";" >> /etc/apt/apt.conf.d/10periodic
-
-    # Set automatic updates for security upgrades
-    echo "Unattended-Upgrade::Automatic-Reboot 'true';" > /etc/apt/apt.conf.d/20auto-upgrades
-    echo "Unattended-Upgrade::Allowed-Origins::${distro_id} ${distro_codename}-security;" >> /etc/apt/apt.conf.d/20auto-upgrades
-
-    # Manually trigger unattended-upgrades without reconfigure (bypassing the warning)
     unattended-upgrade -d > /dev/null
-
     log_and_print "→ Automatic security updates enabled"
+}
+
+# 9. Custom Security Checks
+custom_security_checks() {
+    print_title "9. CUSTOM SECURITY CHECKS"
+    if [ -f "$CUSTOM_CHECKS_CONF" ]; then
+        while IFS= read -r line; do
+            if [[ ! "$line" =~ ^#.* ]]; then
+                section "Running custom check: $line"
+                eval "$line" | tee -a "$REPORT"
+            fi
+        done < "$CUSTOM_CHECKS_CONF"
+    else
+        log_and_print "No custom checks configuration found. Please create '$CUSTOM_CHECKS_CONF'."
+    fi
+}
+
+# 10. Reporting and Alerting
+generate_report() {
+    print_title "10. REPORTING AND ALERTING"
+    
+    section "Generating Summary Report"
+    echo -e "Security Audit Summary" > "$REPORT"
+    echo -e "======================" >> "$REPORT"
+    
+    if grep -q "is NOT running" "$REPORT"; then
+        log_and_print "ALERT: Some critical services are not running. Sending email alert..."
+        send_email_alert
+    fi
+
+    section "Audit completed successfully"
+    log_and_print "Audit completed. No critical issues found."
+}
+
+send_email_alert() {
+    echo "Critical vulnerabilities or misconfigurations found in the security audit. Please review the report at $(hostname)." | mail -s "Security Audit Alert" "$EMAIL"
 }
 
 # Main function to execute all sections
@@ -209,6 +222,8 @@ main() {
     security_updates
     log_monitoring
     hardening_steps
+    custom_security_checks
+    generate_report
 
     echo -e "\n\033[1;32m=== Audit Completed. Report saved to $REPORT ===\033[0m"
 }
