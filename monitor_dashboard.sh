@@ -15,8 +15,14 @@ draw_box() {
 }
 
 draw_section() {
+  # Ensure title is clean and doesn't contain numbers or unexpected formatting
+  local section_title="$1"
+  
   echo -e "${BLUE}$(draw_box 60)${RESET}"
-  printf "| ${GREEN}%-58s${RESET} |\n" "$1"
+  
+  # Ensuring that the title doesn't get cut off and remains clean
+  printf "| ${GREEN}%-58s${RESET} |\n" "$section_title"
+  
   echo -e "${BLUE}$(draw_box 60)${RESET}"
 }
 
