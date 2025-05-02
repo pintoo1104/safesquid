@@ -42,7 +42,9 @@ get_memory_usage() {
 get_cpu_usage() {
   cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print 100 - $8}')
   load_avg=$(uptime | awk -F'load average:' '{ print $2 }')
-  printf "| ${YELLOW}CPU Usage:${RESET} [%-10s] %2.0f%%   ${YELLOW}Load Avg:${RESET} %s |\n" "$(printf '#%.0s' $(seq 1 $((cpu_usage / 10))))" "$cpu_usage" "$load_avg"
+  # Use bc for floating-point arithmetic
+  cpu_usage_rounded=$(echo "$cpu_usage" | bc)
+  printf "| ${YELLOW}CPU Usage:${RESET} [%-10s] %2.0f%%   ${YELLOW}Load Avg:${RESET} %s |\n" "$(printf '#%.0s' $(seq 1 $((cpu_usage_rounded / 10))))" "$cpu_usage_rounded" "$load_avg"
 }
 
 # Function to get disk usage
