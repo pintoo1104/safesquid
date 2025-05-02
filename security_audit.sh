@@ -150,10 +150,14 @@ log_monitoring() {
     log_and_print "$failed_logins"
     log_and_print "\n→ Total failed SSH login attempts: $(echo "$failed_logins" | wc -l)"
 
-    section "Detailed Failed SSH login attempts"
+    section "Detailed Failed SSH Login Attempts"
     detailed_failed_logins=$(grep "Failed password" /var/log/auth.log | awk '{print $1, $2, $3, $9, $11, $13}' | sort | uniq)
     log_and_print "$detailed_failed_logins"
     log_and_print "\n→ Total unique failed login attempts: $(echo "$detailed_failed_logins" | wc -l)"
+
+    section "Failed SSH Login Attempts (Including Timestamp, IP, User)"
+    detailed_failed_logins_full=$(grep "Failed password" /var/log/auth.log | awk '{print "Date: " $1 " " $2 " " $3 ", User: " $9 ", IP: " $11 ", Reason: Failed login"}')
+    log_and_print "$detailed_failed_logins_full"
 
     section "Checking for suspicious login attempts (multiple attempts from the same IP)"
     suspicious_logins=$(grep "Failed password" /var/log/auth.log | awk '{print $0}' | sort | uniq -c | sort -n)
