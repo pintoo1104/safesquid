@@ -7,6 +7,10 @@
 REPORT="security_audit_report.txt"
 > "$REPORT"
 
+# Environment Variable for APT (To avoid warnings related to stable CLI interface)
+export DEBIAN_FRONTEND=noninteractive
+export APT_LISTCHANGES_FRONTEND=none
+
 print_title() {
     local title="$1"
     echo -e "\n\033[1;34m========== $title ==========\033[0m"
@@ -119,7 +123,7 @@ security_updates() {
     apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT"
 
     section "Running unattended upgrade"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades > /dev/null
+    apt-get install -y unattended-upgrades > /dev/null
     unattended-upgrade -d --dry-run | tee -a "$REPORT"
 }
 
@@ -146,15 +150,13 @@ hardening_steps() {
     echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
     sysctl -p | tee -a "$REPORT"
 
-    section "Configure GRUB password (secured)"
-    GRUB_PASS=$(openssl rand -base64 12)  # Generate a random GRUB password
-    grub_pass_file="/etc/grub.d/01_password"
+    section "Configure GRUB password"
+    GRUB_PASS="Strong@$(date +%s)"
     hash=$(echo -e "$GRUB_PASS\n$GRUB_PASS" | grub-mkpasswd-pbkdf2 | awk '/grub.pbkdf2/ {print $NF}')
-    echo "password_pbkdf2 $hash" > "$grub_pass_file"
-    chmod 600 "$grub_pass_file"
+    echo "password_pbkdf2 $GRUB_USER $hash" > /etc/grub.d/01_password
+    chmod 600 /etc/grub.d/01_password
     update-grub
-    log_and_print "→ GRUB password set successfully"
-    log_and_print "→ GRUB Password: $GRUB_PASS"  # This line logs the password in the report
+    log_and_print "→ GRUB password set. Password: $GRUB_PASS"
 
     section "Firewall rules"
     ufw default deny incoming
@@ -168,6 +170,7 @@ hardening_steps() {
     log_and_print "→ Automatic security updates enabled"
 }
 
+# Main function to execute all sections
 main() {
     clear
     echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
