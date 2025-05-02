@@ -53,84 +53,80 @@ user_audit() {
 }
 
 # 2. File and Directory Permissions
-file_permissions() {
+file_permissions_audit() {
     print_title "2. FILE AND DIRECTORY PERMISSIONS"
 
     section "World-writable files and directories"
-    world_writable_files=$(find / -xdev -type f -perm -0002 2>/dev/null)
+    world_writable_files=$(find / -type f -perm -0002 2>/dev/null)
     log_and_print "$world_writable_files"
     log_and_print "\n→ Total world-writable files: $(echo "$world_writable_files" | wc -l)"
 
-    section "Files with SUID or SGID bits set"
-    suid_sgid_files=$(find / -xdev \( -type f -perm -4000 -o -type f -perm -2000 \) 2>/dev/null)
-    log_and_print "$suid_sgid_files"
-    log_and_print "\n→ Total files with SUID/SGID bits set: $(echo "$suid_sgid_files" | wc -l)"
-
-    section ".ssh directory permissions"
-    ssh_dirs=$(find / -type d -name ".ssh" 2>/dev/null)
+    section ".ssh Directories Permissions"
+    ssh_dirs=$(find / -type d -name '.ssh' -exec ls -ld {} \; 2>/dev/null)
     log_and_print "$ssh_dirs"
-    log_and_print "\n→ Total .ssh directories: $(echo "$ssh_dirs" | wc -l)"
+    log_and_print "\n→ Total .ssh directories found: $(echo "$ssh_dirs" | wc -l)"
+
+    section "Files with SUID or SGID Bits Set"
+    suid_sgid_files=$(find / -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null)
+    log_and_print "$suid_sgid_files"
+    log_and_print "\n→ Total files with SUID/SGID bits: $(echo "$suid_sgid_files" | wc -l)"
 }
 
 # 3. Service Audits
 service_audit() {
-    print_title "3. SERVICE AUDITS"
+    print_title "3. SERVICE AUDIT"
 
-    section "List of running services"
-    running_services=$(systemctl list-units --type=service --state=running)
+    section "Running Services"
+    running_services=$(ps aux --no-headers)
     log_and_print "$running_services"
+    log_and_print "\n→ Total running services: $(echo "$running_services" | wc -l)"
 
-    section "Critical services status"
-    critical_services=$(systemctl status sshd iptables)
-    log_and_print "$critical_services"
+    section "Checking for Critical Services"
+    critical_services="sshd iptables"
+    for service in $critical_services; do
+        service_status=$(systemctl is-active $service)
+        log_and_print "$service: $service_status"
+    done
 }
 
 # 4. Firewall and Network Security
 firewall_network_security() {
     print_title "4. FIREWALL AND NETWORK SECURITY"
 
-    section "Firewall status"
-    firewall_status=$(sudo ufw status)
+    section "Firewall Status"
+    firewall_status=$(ufw status verbose)
     log_and_print "$firewall_status"
-
-    section "Open ports and associated services"
+    
+    section "Open Ports"
     open_ports=$(ss -tuln)
     log_and_print "$open_ports"
 
-    section "IP forwarding status"
+    section "IP Forwarding"
     ip_forwarding=$(sysctl net.ipv4.ip_forward)
     log_and_print "$ip_forwarding"
 }
 
 # 5. IP and Network Configuration Checks
 ip_network_config() {
-    print_title "5. IP AND NETWORK CONFIGURATION CHECKS"
+    print_title "5. IP AND NETWORK CONFIGURATION"
 
-    section "Public vs Private IPs"
-    ips=$(ip addr show | grep inet)
-    log_and_print "$ips"
-
-    section "Sensitive services exposed on public IPs"
-    exposed_services=$(ss -tuln | grep -E '0.0.0.0|::')
-    log_and_print "$exposed_services"
+    section "Public vs Private IP"
+    public_private_ip=$(ip a | grep inet)
+    log_and_print "$public_private_ip"
 }
 
 # 6. Security Updates and Patching
 security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
 
-    section "Check for available security updates"
-    updates=$(apt list --upgradable 2>/dev/null | grep security)
-    log_and_print "$updates"
-
-    section "Automatic Updates Status"
-    automatic_updates=$(systemctl is-enabled unattended-upgrades)
-    log_and_print "$automatic_updates"
-
-    section "Applying security updates (if available)"
-    if [ -n "$updates" ]; then
-        log_and_print "Applying security updates..."
-        sudo apt update && sudo apt upgrade -y
+    section "Check for Available Security Updates"
+    updates_available=$(apt list --upgradable 2>/dev/null)
+    log_and_print "$updates_available"
+    
+    section "Applying Security Updates Automatically"
+    if [ -n "$updates_available" ]; then
+        log_and_print "Security updates available, applying updates..."
+        sudo apt-get update && sudo apt-get upgrade -y
     else
         log_and_print "No security updates available."
     fi
@@ -140,41 +136,84 @@ security_updates() {
 log_monitoring() {
     print_title "7. LOG MONITORING"
 
-    section "Checking for Suspicious Login Attempts"
+    section "Recent SSH Login Attempts"
+    recent_logins=$(grep "sshd" /var/log/auth.log | tail -n 20)
+    log_and_print "$recent_logins"
+}
 
-    # Using 'auth.log' to get login attempts (can be other logs depending on system setup)
-    suspicious_logins=$(grep -E "Failed password|authentication failure|sshd.*Failed" /var/log/auth.log)
-    log_and_print "$suspicious_logins"
-    log_and_print "\n→ Total failed login attempts: $(echo "$suspicious_logins" | wc -l)"
+# 8. Server Hardening Steps
+server_hardening() {
+    print_title "8. SERVER HARDENING STEPS"
 
-    section "Recent Successful Logins"
-    successful_logins=$(grep "Accepted password" /var/log/auth.log)
-    log_and_print "$successful_logins"
-    log_and_print "\n→ Total successful logins: $(echo "$successful_logins" | wc -l)"
-    
-    section "Login Attempt Details"
-    log_and_print "Last 10 login attempts (successful and failed):"
-    last_10_logins=$(tail -n 10 /var/log/auth.log | grep -E "sshd|Accepted|Failed")
-    log_and_print "$last_10_logins"
+    section "Set GRUB Password"
+    generate_grub_password_hash
 
-    log_and_print "\nDetails of the last 10 login attempts (timestamp, user, IP address, outcome):"
-    last_10_logins_details=$(tail -n 10 /var/log/auth.log | grep -E "sshd|Accepted|Failed" | awk '{print $1, $2, $3, $9, $11}')
-    log_and_print "$last_10_logins_details"
+    section "Disable IPv6 if not required"
+    disable_ipv6_if_needed
+
+    section "Secure Bootloader"
+    set_grub_password
+
+    section "Configure Firewall Rules"
+    configure_firewall
+
+    section "Enable Automatic Updates"
+    enable_automatic_updates
+}
+
+# Function to generate GRUB password hash
+generate_grub_password_hash() {
+    read -sp "Enter GRUB password: " grub_password
+    echo
+    grub_hash=$(echo -n "$grub_password" | grub-mkpasswd-pbkdf2 | grep -o 'grub.pbkdf2.*')
+    echo "set superusers=\"root\"" >> /etc/grub.d/40_custom
+    echo "password_pbkdf2 root $grub_hash" >> /etc/grub.d/40_custom
+    update-grub
+    log_and_print "GRUB password has been set."
+}
+
+# Function to disable IPv6 if needed
+disable_ipv6_if_needed() {
+    if [ "$DISABLE_IPV6" == "yes" ]; then
+        sysctl -w net.ipv6.conf.all.disable_ipv6=1
+        sysctl -w net.ipv6.conf.default.disable_ipv6=1
+        sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+        log_and_print "IPv6 has been disabled."
+    else
+        log_and_print "IPv6 is enabled, no action taken."
+    fi
+}
+
+# Function to configure firewall rules
+configure_firewall() {
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow ssh
+    ufw enable
+    log_and_print "Firewall rules have been configured."
+}
+
+# Function to enable automatic updates
+enable_automatic_updates() {
+    apt-get install unattended-upgrades
+    dpkg-reconfigure --priority=low unattended-upgrades
+    log_and_print "Automatic updates have been enabled."
 }
 
 # Main function to start the audit
 main() {
     clear
     echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
-    
-    # Run all audit sections
+
+    # Run all audit functions
     user_audit
-    file_permissions
+    file_permissions_audit
     service_audit
     firewall_network_security
     ip_network_config
     security_updates
     log_monitoring
+    server_hardening
     
     echo -e "\n\033[1;32m=== Security Audit Completed ===\033[0m"
 }
