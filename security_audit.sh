@@ -53,54 +53,54 @@ user_audit() {
 }
 
 # 2. File and Directory Permissions
-file_permissions_audit() {
+file_permissions() {
     print_title "2. FILE AND DIRECTORY PERMISSIONS"
 
-    section "World-writable files and directories"
+    section "Files and Directories with World Writable Permissions"
     world_writable=$(find / -type f -perm -0002 2>/dev/null)
     log_and_print "$world_writable"
-    log_and_print "\n→ Total world-writable files: $(echo "$world_writable" | wc -l)"
+    log_and_print "\n→ Total files with world writable permissions: $(echo "$world_writable" | wc -l)"
 
-    section "Check for .ssh directories with secure permissions"
+    section "Presence and Permissions of .ssh Directories"
     ssh_dirs=$(find / -type d -name ".ssh" -exec ls -ld {} \; 2>/dev/null)
     log_and_print "$ssh_dirs"
-    log_and_print "\n→ Total .ssh directories with secure permissions: $(echo "$ssh_dirs" | wc -l)"
 
-    section "SUID and SGID Executables"
+    section "Files with SUID or SGID Bits Set"
     suid_sgid=$(find / -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null)
     log_and_print "$suid_sgid"
-    log_and_print "\n→ Total SUID/SGID files: $(echo "$suid_sgid" | wc -l)"
+    log_and_print "\n→ Total files with SUID/SGID bits set: $(echo "$suid_sgid" | wc -l)"
 }
 
 # 3. Service Audits
 service_audit() {
-    print_title "3. SERVICE AUDIT"
+    print_title "3. SERVICE AUDITS"
 
-    section "List of running services"
-    running_services=$(ps aux --no-headers)
-    log_and_print "$running_services"
-    log_and_print "\n→ Total running services: $(echo "$running_services" | wc -l)"
+    section "Running Services"
+    services=$(ps -e)
+    log_and_print "$services"
 
-    section "Critical Services Status (e.g., sshd, iptables)"
-    critical_services=$(systemctl status sshd iptables 2>/dev/null)
-    log_and_print "$critical_services"
+    section "Checking for Critical Services"
+    critical_services=("sshd" "iptables")
+    for service in "${critical_services[@]}"; do
+        status=$(systemctl is-active "$service")
+        log_and_print "$service: $status"
+    done
 
-    section "Check for unauthorized services"
-    unauthorized_services=$(ps aux --no-headers | grep -v 'sshd' | grep -v 'iptables' | awk '{print $11}' | sort | uniq)
-    log_and_print "$unauthorized_services"
-    log_and_print "\n→ Unauthorized services: $(echo "$unauthorized_services" | wc -l)"
+    section "Services Listening on Non-Standard Ports"
+    non_standard_ports=$(netstat -tuln | grep -Ev '127.0.0.1|::1')
+    log_and_print "$non_standard_ports"
 }
 
 # 4. Firewall and Network Security
-firewall_network_audit() {
+firewall_and_network_security() {
     print_title "4. FIREWALL AND NETWORK SECURITY"
 
     section "Firewall Status"
     firewall_status=$(ufw status verbose 2>/dev/null)
     log_and_print "$firewall_status"
 
-    section "Open Ports"
-    open_ports=$(netstat -tuln 2>/dev/null)
+    section "Open Ports and Associated Services"
+    open_ports=$(netstat -tuln)
     log_and_print "$open_ports"
 
     section "IP Forwarding and Network Configurations"
@@ -109,39 +109,36 @@ firewall_network_audit() {
 }
 
 # 5. IP and Network Configuration Checks
-network_config_audit() {
+ip_network_checks() {
     print_title "5. IP AND NETWORK CONFIGURATION CHECKS"
 
-    section "Public vs. Private IP Addresses"
-    ip_addresses=$(hostname -I)
-    public_ips=$(echo "$ip_addresses" | grep -E '^(?:8[0-9]|10|172|192)\.')
-    private_ips=$(echo "$ip_addresses" | grep -E '^10\.')
-
-    log_and_print "Public IPs: $public_ips"
-    log_and_print "Private IPs: $private_ips"
-    log_and_print "\n→ Total IP addresses: $(echo "$ip_addresses" | wc -w)"
+    section "Public vs Private IPs"
+    ips=$(hostname -I)
+    for ip in $ips; do
+        if [[ "$ip" =~ ^10\. || "$ip" =~ ^172\.16\. || "$ip" =~ ^192\.168\. ]]; then
+            echo "$ip is a private IP"
+        else
+            echo "$ip is a public IP"
+        fi
+    done
 }
 
 # 6. Security Updates and Patching
-security_updates_audit() {
+security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
 
-    section "Checking for available updates"
-    available_updates=$(sudo apt list --upgradable 2>/dev/null | grep -i security)
+    section "Checking for Available Security Updates"
+    available_updates=$(apt list --upgradable 2>/dev/null)
     log_and_print "$available_updates"
-    log_and_print "\n→ Total security updates available: $(echo "$available_updates" | wc -l)"
+    log_and_print "\n→ Total available updates: $(echo "$available_updates" | wc -l)"
 
-    section "Ensure automatic updates are enabled"
-    auto_updates_status=$(systemctl is-active unattended-upgrades)
-    log_and_print "Automatic updates status: $auto_updates_status"
+    section "Applying Security Updates"
+    sudo unattended-upgrade -d
+    log_and_print "\n→ Security updates applied successfully."
 
-    if [[ "$auto_updates_status" == "active" ]]; then
-        log_and_print "\n→ Automatic updates are active."
-    else
-        log_and_print "\n→ Automatic updates are NOT active. Enabling automatic updates..."
-        sudo systemctl start unattended-upgrades
-        sudo systemctl enable unattended-upgrades
-    fi
+    section "Automatic Updates"
+    automatic_updates_status=$(systemctl is-enabled apt-daily.timer)
+    log_and_print "$automatic_updates_status"
 }
 
 # 7. Log Monitoring
@@ -152,6 +149,11 @@ log_monitoring() {
     failed_logins=$(grep "Failed password" /var/log/auth.log 2>/dev/null)
     log_and_print "$failed_logins"
     log_and_print "\n→ Total failed SSH login attempts: $(echo "$failed_logins" | wc -l)"
+
+    section "Detailed Failed SSH login attempts"
+    detailed_failed_logins=$(grep "Failed password" /var/log/auth.log | awk '{print $1, $2, $3, $9, $11}' | sort | uniq)
+    log_and_print "$detailed_failed_logins"
+    log_and_print "\n→ Total unique failed login attempts: $(echo "$detailed_failed_logins" | wc -l)"
 
     section "Checking for suspicious login attempts (multiple attempts from the same IP)"
     suspicious_logins=$(grep "Failed password" /var/log/auth.log | awk '{print $0}' | sort | uniq -c | sort -n)
@@ -164,13 +166,25 @@ main() {
     clear
     echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
     
-    # Run all sections
+    # Run the User and Group Audits
     user_audit
-    file_permissions_audit
+    
+    # Run the File and Directory Permissions
+    file_permissions
+
+    # Run the Service Audits
     service_audit
-    firewall_network_audit
-    network_config_audit
-    security_updates_audit
+    
+    # Run the Firewall and Network Security
+    firewall_and_network_security
+    
+    # Run the IP and Network Configuration Checks
+    ip_network_checks
+    
+    # Run the Security Updates and Patching
+    security_updates
+    
+    # Run the Log Monitoring
     log_monitoring
     
     echo -e "\n\033[1;32m=== Security Audit Completed ===\033[0m"
