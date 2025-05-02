@@ -87,6 +87,37 @@ file_permission_audit() {
     fi
 }
 
+# 3. Service Audits
+service_audit() {
+    print_title "3. SERVICE AUDIT"
+
+    section "Running Services"
+    running_services=$(systemctl list-units --type=service --state=running --no-pager)
+    log_and_print "$running_services"
+
+    section "Check for Unauthorized/Unnecessary Services"
+    common_unwanted_services=("telnet" "ftp" "rsh" "rlogin" "rexec" "cups")
+    for svc in "${common_unwanted_services[@]}"; do
+        if systemctl is-active --quiet "$svc"; then
+            log_and_print "⚠ Warning: $svc service is running (should be disabled)"
+        fi
+    done
+
+    section "Check Critical Services"
+    critical_services=("sshd" "ufw" "iptables" "firewalld")
+    for svc in "${critical_services[@]}"; do
+        if systemctl is-active --quiet "$svc"; then
+            log_and_print "✔ $svc is running"
+        else
+            log_and_print "⚠ Warning: $svc is NOT running"
+        fi
+    done
+
+    section "Check for Services on Non-Standard or Insecure Ports"
+    open_ports=$(ss -tuln)
+    log_and_print "$open_ports"
+}
+
 # Main function
 main() {
     clear
@@ -94,6 +125,7 @@ main() {
 
     user_audit
     file_permission_audit
+    service_audit
 
     echo -e "\n\033[1;32m=== Security Audit Completed ===\033[0m"
     echo -e "\nReport saved to: $REPORT"
