@@ -11,6 +11,10 @@ REPORT="security_audit_report.txt"
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 
+# Suppress warnings related to APT's unstable CLI interface
+export APT::Get::Assume-Yes=true
+export APT::Get::AllowUnauthenticated=true
+
 # Function to suppress any warnings or prompts from apt
 apt_update() {
     apt-get update -q -y > /dev/null
