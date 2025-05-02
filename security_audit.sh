@@ -1,207 +1,206 @@
 #!/bin/bash
 
-# =========================================
-# Linux Security Audit and Hardening Script
-# =========================================
+# ======================================
+# Linux Security Audit and Hardening
+# ======================================
 
 REPORT="security_audit_report.txt"
 > "$REPORT"
 
+# Set APT to non-interactive to avoid CLI warnings
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 
-# ----------- Utility Functions ------------
-
+# Function to suppress any warnings or prompts from apt
 apt_update() {
-    apt-get update -q -y >> "$REPORT" 2>&1
-    apt-get upgrade -q -y >> "$REPORT" 2>&1
+    apt-get update -q -y > /dev/null
+    apt-get upgrade -q -y > /dev/null
 }
 
+# Function to install packages without interactive prompts
 install_package() {
     local package="$1"
-    apt-get install -y -q "$package" >> "$REPORT" 2>&1
+    apt-get install -y -q "$package" > /dev/null
 }
 
 print_title() {
     local title="$1"
-    echo -e "\n========== $title ==========\n" | tee -a "$REPORT"
+    echo -e "\n\033[1;34m========== $title ==========\033[0m"
+    echo -e "\n========== $title ==========" >> "$REPORT"
 }
 
-print_section() {
-    local title="$1"
-    echo -e "\n-- $title --\n" | tee -a "$REPORT"
+print_subtitle() {
+    echo -e "\n\033[1;32m-- $1 --\033[0m"
+    echo -e "\n-- $1 --" >> "$REPORT"
 }
 
-log_command() {
-    echo -e "\n\$ $1" >> "$REPORT"
-    eval "$1" >> "$REPORT" 2>&1
+log_and_print() {
+    echo -e "$1"
+    echo -e "$1" >> "$REPORT"
 }
 
-# ----------- 1. User and Group Audit ------------
+section() {
+    echo -e "\n+------------------------------------------------------------+"
+    echo -e "| $1"
+    echo -e "+------------------------------------------------------------+"
+    echo -e "\n+------------------------------------------------------------+" >> "$REPORT"
+    echo -e "| $1" >> "$REPORT"
+    echo -e "+------------------------------------------------------------+" >> "$REPORT"
+}
 
+# 1. User and Group Audits
 user_audit() {
     print_title "1. USER AND GROUP AUDIT"
 
-    print_section "Users with UID 0 (root access)"
-    log_command "getent passwd | awk -F: '\$3 == 0 {print \$1}'"
+    section "Users with UID 0 (root access)"
+    root_users=$(getent passwd | awk -F: '$3 == 0 {print $1}')
+    log_and_print "$root_users"
 
-    print_section "Users without passwords or disabled accounts"
-    log_command "awk -F: '(\$2 == \"\" || \$2 == \"!\" || \$2 == \"*\") {print \$1}' /etc/shadow"
+    section "Users without password"
+    no_pass=$(sudo awk -F: '($2 == "" || $2 == "!" || $2 == "*") {print $1}' /etc/shadow)
+    log_and_print "$no_pass"
 
-    print_section "All Local Users"
-    log_command "cut -d: -f1 /etc/passwd"
+    section "All Local Users"
+    cut -d: -f1 /etc/passwd | log_and_print
 
-    print_section "All Local Groups"
-    log_command "cut -d: -f1 /etc/group"
+    section "All Local Groups"
+    cut -d: -f1 /etc/group | log_and_print
 }
 
-# ----------- 2. File and Directory Permissions ------------
-
+# 2. File and Directory Permissions
 file_perm_audit() {
     print_title "2. FILE AND DIRECTORY PERMISSIONS"
 
-    print_section "World-writable files and directories"
-    log_command "find / -xdev -type f -perm -0002 -ls 2>/dev/null"
+    section "World-writable files and directories"
+    find / -xdev -type f -perm -0002 -ls 2>/dev/null | tee -a "$REPORT"
 
-    print_section ".ssh directories and permissions"
-    log_command "find /home -name '.ssh' -exec ls -ld {} \; 2>/dev/null"
+    section "Check .ssh directories for permissions"
+    find /home -name ".ssh" -exec ls -ld {} \; 2>/dev/null | tee -a "$REPORT"
 
-    print_section "Files with SUID/SGID"
-    log_command "find / -xdev \\( -perm -4000 -o -perm -2000 \\) -type f -ls 2>/dev/null"
+    section "Files with SUID/SGID"
+    find / -xdev \( -perm -4000 -o -perm -2000 \) -type f -ls 2>/dev/null | tee -a "$REPORT"
 }
 
-# ----------- 3. Service Audits ------------
-
+# 3. Service Audits
 service_audit() {
     print_title "3. SERVICE AUDIT"
 
-    print_section "Running services"
-    log_command "systemctl list-units --type=service --state=running"
+    section "Running services"
+    systemctl list-units --type=service --state=running | tee -a "$REPORT"
 
-    print_section "Critical services (sshd, ufw, iptables)"
+    section "Critical services check"
     for svc in sshd ufw iptables; do
-        echo -e "\nService: $svc" >> "$REPORT"
-        systemctl is-active "$svc" >> "$REPORT" 2>&1
+        if systemctl is-active --quiet $svc; then
+            log_and_print "$svc is running"
+        else
+            log_and_print "$svc is NOT running"
+        fi
     done
 
-    print_section "Services listening on non-standard ports"
-    log_command "ss -tulpn | grep -vE '(:22|:80|:443)'"
+    section "Check for services on non-standard ports"
+    ss -tulpn | grep -vE '(:22|:80|:443)' | tee -a "$REPORT"
 }
 
-# ----------- 4. Firewall & Network Security ------------
-
+# 4. Firewall and Network Security
 network_audit() {
     print_title "4. FIREWALL & NETWORK SECURITY"
 
-    print_section "Firewall (ufw) status"
-    log_command "ufw status verbose"
+    section "Firewall status"
+    ufw status verbose | tee -a "$REPORT"
 
-    print_section "Open ports"
-    log_command "ss -tuln"
+    section "Open ports"
+    ss -tuln | tee -a "$REPORT"
 
-    print_section "IP Forwarding Status"
-    log_command "sysctl net.ipv4.ip_forward"
+    section "IP forwarding status"
+    sysctl net.ipv4.ip_forward | tee -a "$REPORT"
 }
 
-# ----------- 5. IP Configuration & Type ------------
-
+# 5. IP and Network Configuration Checks
 ip_audit() {
-    print_title "5. PUBLIC vs PRIVATE IP AUDIT"
+    print_title "5. PUBLIC vs PRIVATE IP CHECK"
 
-    print_section "IP Address (Local)"
-    log_command "ip -4 a"
+    section "IP address summary"
+    ip -4 a | tee -a "$REPORT"
 
-    print_section "Public IP (external)"
-    log_command "curl -s ifconfig.me"
+    section "Public IP check"
+    curl -s ifconfig.me | tee -a "$REPORT"
 }
 
-# ----------- 6. Security Updates & Patch Check ------------
-
+# 6. Security Updates and Patching
 security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
 
-    print_section "System package updates"
+    section "Available updates"
     apt_update
 
-    print_section "Unattended-upgrades dry run"
-    install_package unattended-upgrades
-    log_command "unattended-upgrade -d --dry-run"
+    section "Security updates"
+    apt-get upgrade -q -y --only-upgrade | tee -a "$REPORT"
+
+    section "Running unattended upgrade"
+    apt-get install -y unattended-upgrades > /dev/null
+    unattended-upgrade -d --dry-run | tee -a "$REPORT"
 }
 
-# ----------- 7. Log Monitoring ------------
-
+# 7. Log Monitoring
 log_monitoring() {
     print_title "7. LOG MONITORING"
 
-    print_section "SSH login attempts (last 50 lines from auth.log)"
-    log_command "grep -E 'Failed|Accepted' /var/log/auth.log | tail -n 50"
+    section "SSH login attempts from auth.log"
+    grep -E "Failed|Accepted" /var/log/auth.log | tail -n 50 | tee -a "$REPORT"
 }
 
-# ----------- 8. Server Hardening ------------
-
+# 8. Server Hardening Steps
 hardening_steps() {
-    print_title "8. SERVER HARDENING MEASURES"
+    print_title "8. SERVER HARDENING"
 
-    print_section "Disabling root SSH and password authentication"
-    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-    log_command "systemctl restart sshd"
+    section "SSH hardening"
+    sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+    systemctl restart sshd
+    log_and_print "→ SSH hardened: root login & password auth disabled"
 
-    print_section "Disabling IPv6"
+    section "Disable IPv6"
     echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
     echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-    log_command "sysctl -p"
+    sysctl -p | tee -a "$REPORT"
 
-    print_section "Securing GRUB with Password"
-    read -s -p "Enter GRUB password: " grub_pass1
-    echo
-    read -s -p "Confirm GRUB password: " grub_pass2
-    echo
+    section "Configure GRUB password"
+    GRUB_PASS="Strong@$(date +%s)"
+    hash=$(echo -e "$GRUB_PASS\n$GRUB_PASS" | grub-mkpasswd-pbkdf2 | awk '/grub.pbkdf2/ {print $NF}')
+    echo "password_pbkdf2 $GRUB_USER $hash" > /etc/grub.d/01_password
+    chmod 600 /etc/grub.d/01_password
+    update-grub
+    log_and_print "→ GRUB password set. Password: $GRUB_PASS"
 
-    if [[ "$grub_pass1" != "$grub_pass2" ]]; then
-        echo "❌ GRUB password mismatch. Skipping setup." | tee -a "$REPORT"
-    else
-        grub_hash=$(echo -e "$grub_pass1\n$grub_pass1" | grub-mkpasswd-pbkdf2 | grep 'grub.pbkdf2' | awk '{print $7}')
-        sed -i '/set superusers=/d' /etc/grub.d/40_custom
-        sed -i '/password_pbkdf2 root/d' /etc/grub.d/40_custom
+    section "Firewall rules"
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow 22
+    ufw enable
 
-        cat <<EOF >> /etc/grub.d/40_custom
+    section "Enable automatic updates"
+    apt install -y unattended-upgrades > /dev/null
 
-set superusers="root"
-password_pbkdf2 root $grub_hash
-EOF
+    # Directly modify the configuration file for automatic updates
+    echo "APT::Periodic::Update-Package-Lists \"1\";" > /etc/apt/apt.conf.d/10periodic
+    echo "APT::Periodic::Unattended-Upgrade \"1\";" >> /etc/apt/apt.conf.d/10periodic
+    echo "APT::Periodic::AutocleanInterval \"7\";" >> /etc/apt/apt.conf.d/10periodic
 
-        chmod 600 /etc/grub.d/40_custom
-        log_command "update-grub"
-    fi
+    # Set automatic updates for security upgrades
+    echo "Unattended-Upgrade::Automatic-Reboot 'true';" > /etc/apt/apt.conf.d/20auto-upgrades
+    echo "Unattended-Upgrade::Allowed-Origins::${distro_id} ${distro_codename}-security;" >> /etc/apt/apt.conf.d/20auto-upgrades
 
-    print_section "Configure firewall (UFW)"
-    install_package ufw
-    ufw default deny incoming >> "$REPORT" 2>&1
-    ufw default allow outgoing >> "$REPORT" 2>&1
-    ufw allow 22 >> "$REPORT" 2>&1
-    ufw --force enable >> "$REPORT" 2>&1
+    # Manually trigger unattended-upgrades without reconfigure (bypassing the warning)
+    unattended-upgrade -d > /dev/null
 
-    print_section "Enable Unattended Upgrades"
-    install_package unattended-upgrades
-    cat <<EOF > /etc/apt/apt.conf.d/10periodic
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-
-    cat <<EOF > /etc/apt/apt.conf.d/20auto-upgrades
-Unattended-Upgrade::Automatic-Reboot "true";
-EOF
-
-    log_command "unattended-upgrade -d"
+    log_and_print "→ Automatic security updates enabled"
 }
 
-# ----------- MAIN ------------
-
+# Main function to execute all sections
 main() {
     clear
-    echo "=== Starting Linux Security Audit ==="
+    echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
+
     user_audit
     file_perm_audit
     service_audit
@@ -210,7 +209,8 @@ main() {
     security_updates
     log_monitoring
     hardening_steps
-    echo -e "\n✅ Audit completed. Full report saved to: $REPORT"
+
+    echo -e "\n\033[1;32m=== Audit Completed. Report saved to $REPORT ===\033[0m"
 }
 
 main
