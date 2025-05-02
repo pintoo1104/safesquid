@@ -115,12 +115,12 @@ security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
 
     section "Available updates"
-    apt update -qq > /dev/null
-    apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT"
+    sudo apt-get update -qq > /dev/null
+    sudo apt-get list --upgradable 2>/dev/null | grep security | tee -a "$REPORT"
 
     section "Running unattended upgrade"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades > /dev/null
-    unattended-upgrade -d --dry-run | tee -a "$REPORT"
+    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y unattended-upgrades > /dev/null
+    sudo unattended-upgrade -d --dry-run | tee -a "$REPORT"
 }
 
 # 7. Log Monitoring
@@ -164,8 +164,8 @@ hardening_steps() {
     ufw enable
 
     section "Enable automatic updates"
-    apt install -y unattended-upgrades > /dev/null
-    dpkg-reconfigure --frontend=noninteractive unattended-upgrades
+    sudo apt-get install -y unattended-upgrades > /dev/null
+    sudo dpkg-reconfigure --frontend=noninteractive unattended-upgrades
     log_and_print "→ Automatic security updates enabled"
 }
 
