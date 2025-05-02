@@ -5,28 +5,26 @@
 # ======================================
 
 REPORT="security_audit_report.txt"
-> "$REPORT"
+> "$REPORT"  # Clear the previous report
 
+# Function to print and log the title
 print_title() {
     local title="$1"
     echo -e "\n\033[1;34m========== $title ==========\033[0m"
     echo -e "\n========== $title ==========" >> "$REPORT"
 }
 
-print_subtitle() {
-    echo -e "\n\033[1;32m-- $1 --\033[0m"
-    echo -e "\n-- $1 --" >> "$REPORT"
-}
-
+# Function to log and print
 log_and_print() {
     echo -e "$1"
     echo -e "$1" >> "$REPORT"
 }
 
+# Function to section off the report
 section() {
-    echo -e "\n+------------------------------------------------------------+"
-    echo -e "| $1"
-    echo -e "+------------------------------------------------------------+"
+    echo -e "\n+------------------------------------------------------------+" 
+    echo -e "| $1" 
+    echo -e "+------------------------------------------------------------+" 
     echo -e "\n+------------------------------------------------------------+" >> "$REPORT"
     echo -e "| $1" >> "$REPORT"
     echo -e "+------------------------------------------------------------+" >> "$REPORT"
@@ -115,8 +113,8 @@ security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
 
     section "Available updates"
-    apt update -qq > /dev/null
-    apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT"
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq > /dev/null
+    apt-get list --upgradable 2>/dev/null | grep security | tee -a "$REPORT"
 
     section "Running unattended upgrade"
     DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades > /dev/null
@@ -146,15 +144,6 @@ hardening_steps() {
     echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
     sysctl -p | tee -a "$REPORT"
 
-    section "Configure GRUB password (secured)"
-    read -sp "Enter GRUB password: " GRUB_PASS
-    hash=$(echo -e "$GRUB_PASS\n$GRUB_PASS" | grub-mkpasswd-pbkdf2 | awk '/grub.pbkdf2/ {print $NF}')
-    echo "set superuser=\"root\"" > /etc/grub.d/01_password
-    echo "password_pbkdf2 root $hash" >> /etc/grub.d/01_password
-    chmod 600 /etc/grub.d/01_password
-    update-grub
-    log_and_print "→ GRUB password set for user 'root'. Password has been securely stored."
-
     section "Firewall rules"
     ufw default deny incoming
     ufw default allow outgoing
@@ -162,11 +151,12 @@ hardening_steps() {
     ufw enable
 
     section "Enable automatic updates"
-    apt install -y unattended-upgrades > /dev/null
+    apt-get install -y unattended-upgrades > /dev/null
     dpkg-reconfigure --frontend=noninteractive unattended-upgrades
     log_and_print "→ Automatic security updates enabled"
 }
 
+# Main function
 main() {
     clear
     echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
