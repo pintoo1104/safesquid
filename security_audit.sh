@@ -1,147 +1,187 @@
 #!/bin/bash
 
-# ===========================
-# Linux Security Audit & Hardening Script
-# ===========================
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+REPORT="security_audit_report_$TIMESTAMP.txt"
 
-# Define the output file to be created in the current directory
-REPORT_FILE="./security_hardening_report_$(date +%F_%H-%M-%S).txt"
+# Create empty report in current directory
+touch "$REPORT"
 
-# Initialize the report file
-echo "===== Security Audit and Hardening Report =====" > "$REPORT_FILE"
-echo "Security Audit and Hardening Report - $(date)" >> "$REPORT_FILE"
-echo "" >> "$REPORT_FILE"
-
-# Function to display output and also save it to the report file
-output_and_report() {
-    echo "$1"        # Display the output in terminal
-    echo "$1" >> "$REPORT_FILE"  # Save the output to the file
+log() {
+    echo "[+] $1" | tee -a "$REPORT"
 }
 
-# ========== User and Group Audits ==========
+warn() {
+    echo "[!] $1" | tee -a "$REPORT"
+}
+
+error() {
+    echo "[X] $1" | tee -a "$REPORT"
+}
+
+section() {
+    echo -e "\n==================== $1 ====================\n" | tee -a "$REPORT"
+}
+
+# 1. User & Group Audits
 user_group_audit() {
-    output_and_report "User and Group Audit"
-    output_and_report "List of all users and groups:"
-    getent passwd >> "$REPORT_FILE"
-    getent group >> "$REPORT_FILE"
-    output_and_report "Non-root users with UID 0:"
-    awk -F: '($3 == 0) {print $1}' /etc/passwd | grep -v '^root$' >> "$REPORT_FILE"
-    output_and_report "Users without passwords:"
-    awk -F: '($2 == "" || $2 == "*" || $2 == "!" ) {print $1}' /etc/shadow >> "$REPORT_FILE"
+    section "User & Group Audit"
+    log "All system users:"
+    getent passwd | tee -a "$REPORT"
+
+    log "All system groups:"
+    getent group | tee -a "$REPORT"
+
+    log "Users with UID 0 (expect only root):"
+    awk -F: '($3 == 0) {print $1}' /etc/passwd | grep -v '^root$' | while read -r user; do
+        warn "Non-root user with UID 0: $user"
+    done
+
+    log "Users without passwords or locked accounts:"
+    awk -F: '($2 == "" || $2 ~ /^[*!]$/) {print $1}' /etc/shadow | tee -a "$REPORT"
 }
 
-# ========== File Permissions Audit ==========
+# 2. File & Directory Permissions
 permissions_audit() {
-    output_and_report "File and Directory Permissions Audit"
-    output_and_report "Files and directories with world-writable permissions:"
-    find / -xdev -type f -perm -0002 -print >> "$REPORT_FILE"
-    find / -xdev -type d -perm -0002 -print >> "$REPORT_FILE"
-    output_and_report ".ssh directories:"
-    find /home -name ".ssh" -exec ls -ld {} + >> "$REPORT_FILE"
-    output_and_report "Files with SUID/SGID bits set:"
-    find / -xdev \( -perm -4000 -o -perm -2000 \) -exec ls -ld {} + >> "$REPORT_FILE"
+    section "File and Directory Permissions"
+    log "World-writable files:"
+    find / -xdev -type f -perm -0002 -print 2>/dev/null | tee -a "$REPORT"
+
+    log "World-writable directories:"
+    find / -xdev -type d -perm -0002 -print 2>/dev/null | tee -a "$REPORT"
+
+    log ".ssh directory permissions:"
+    find /home -name ".ssh" -exec ls -ld {} + 2>/dev/null | tee -a "$REPORT"
+
+    log "Files with SUID/SGID bits:"
+    find / -xdev \( -perm -4000 -o -perm -2000 \) -exec ls -ld {} + 2>/dev/null | tee -a "$REPORT"
 }
 
-# ========== Service Audit ==========
+# 3. Services Audit
 service_audit() {
-    output_and_report "Service Audit"
-    output_and_report "List of running services:"
-    systemctl list-units --type=service --state=running >> "$REPORT_FILE"
-    output_and_report "Critical services status:"
+    section "Service Audit"
+    log "Running services:"
+    systemctl list-units --type=service --state=running | tee -a "$REPORT"
+
     for svc in ssh ufw iptables; do
-        systemctl is-enabled "$svc" >/dev/null 2>&1 && echo "$svc is enabled" || echo "$svc not enabled"
-    done >> "$REPORT_FILE"
-    output_and_report "Active network ports and services:"
-    netstat -tulnp >> "$REPORT_FILE"
+        if systemctl is-enabled "$svc" >/dev/null 2>&1; then
+            log "$svc is enabled"
+        else
+            warn "$svc is NOT enabled"
+        fi
+    done
+
+    log "Listening ports:"
+    ss -tuln | tee -a "$REPORT"
 }
 
-# ========== Firewall and Network Security ==========
-firewall_network_audit() {
-    output_and_report "Firewall and Network Configuration"
-    output_and_report "Firewall status (ufw):"
-    ufw status >> "$REPORT_FILE"
-    output_and_report "Active network ports:"
-    netstat -tuln >> "$REPORT_FILE"
-    output_and_report "IP forwarding status:"
-    sysctl net.ipv4.ip_forward >> "$REPORT_FILE"
-    sysctl net.ipv6.conf.all.disable_ipv6 >> "$REPORT_FILE"
+# 4. Firewall & Network Security
+firewall_check() {
+    section "Firewall and Network Security"
+    if ufw status | grep -q "Status: active"; then
+        log "UFW is active"
+    else
+        warn "UFW is not active"
+    fi
+
+    log "Open ports:"
+    ss -tuln | tee -a "$REPORT"
+
+    log "IP forwarding:"
+    sysctl net.ipv4.ip_forward | tee -a "$REPORT"
+    sysctl net.ipv6.conf.all.disable_ipv6 | tee -a "$REPORT"
 }
 
-# ========== IP Configuration Checks ==========
+# 5. IP Check
 ip_check() {
-    output_and_report "IP Address and Exposure Check"
-    output_and_report "IP address details:"
-    ip -br a >> "$REPORT_FILE"
+    section "IP Configuration and Public/Private IP Check"
+    ip -br a | tee -a "$REPORT"
     ip a | grep inet | while read -r line; do
         ip=$(echo $line | awk '{print $2}' | cut -d/ -f1)
         if [[ $ip == 10.* || $ip == 172.* || $ip == 192.168.* ]]; then
-            output_and_report "Private IP: $ip"
+            log "Private IP: $ip"
         else
-            output_and_report "Public IP detected: $ip"
+            warn "Public IP: $ip"
         fi
-    done >> "$REPORT_FILE"
+    done
 }
 
-# ========== Security Updates ==========
+# 6. Security Updates
 check_updates() {
-    output_and_report "Checking for Security Updates"
-    apt update -y && apt list --upgradable 2>/dev/null >> "$REPORT_FILE"
-    apt install -y unattended-upgrades
+    section "Security Updates"
+    apt update -y >/dev/null 2>&1
+    apt list --upgradable 2>/dev/null | tee -a "$REPORT"
+
+    log "Installing unattended-upgrades..."
+    apt install -y unattended-upgrades >/dev/null 2>&1
     dpkg-reconfigure -f noninteractive unattended-upgrades
+    log "Unattended-upgrades configured"
 }
 
-# ========== Log Monitoring ==========
+# 7. Log Monitoring
 monitor_logs() {
-    output_and_report "Log Monitoring"
-    output_and_report "Recent failed login attempts:"
-    grep -i "failed\|invalid" /var/log/auth.log | tail -n 10 >> "$REPORT_FILE"
+    section "Log Monitoring (SSH login attempts)"
+    grep -i "failed\|invalid" /var/log/auth.log | tail -n 10 | tee -a "$REPORT"
 }
 
-# ========== SSH Hardening ==========
+# 8. SSH Hardening
 secure_ssh() {
-    output_and_report "Securing SSH"
+    section "SSH Hardening"
     sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
     sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
     systemctl restart sshd
+    log "SSH configuration updated: root login and password auth disabled"
 }
 
-# ========== Disable IPv6 ==========
+# 9. Disable IPv6
 disable_ipv6() {
-    output_and_report "Disabling IPv6"
+    section "Disabling IPv6"
     echo -e "\n# Disable IPv6" >> /etc/sysctl.conf
     echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
     echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
     sysctl -p
+    log "IPv6 disabled"
 }
 
-# ========== Bootloader Hardening ==========
+# 10. Secure GRUB
 secure_bootloader() {
-    output_and_report "Securing Bootloader"
-    GRUB_PASSWORD=${GRUB_PASSWORD:-'SecurePass123'}
-    HASHED_PASSWORD=$(echo -e "$GRUB_PASSWORD\n$GRUB_PASSWORD" | grub-mkpasswd-pbkdf2 | grep grub.pbkdf2 | awk '{print $NF}')
-    {
-        echo "set superusers=\"admin\""
-        echo "password_pbkdf2 admin $HASHED_PASSWORD"
-    } > /etc/grub.d/40_custom
+    section "GRUB Bootloader Hardening"
+    GRUB_PASSWORD='SafeSquidSecure#123'
+    HASHED=$(echo -e "$GRUB_PASSWORD\n$GRUB_PASSWORD" | grub-mkpasswd-pbkdf2 | grep grub.pbkdf2 | awk '{print $NF}')
+    echo "set superusers=\"admin\"" > /etc/grub.d/40_custom
+    echo "password_pbkdf2 admin $HASHED" >> /etc/grub.d/40_custom
     update-grub
-    output_and_report "GRUB password set and bootloader secured"
+    log "Bootloader password set"
 }
 
-# ========== Configure Firewall ==========
+# 11. Configure Firewall
 configure_firewall() {
-    output_and_report "Configuring Firewall"
+    section "Firewall Rules (UFW)"
     ufw default deny incoming
     ufw default allow outgoing
     ufw allow ssh
     ufw enable
+    log "UFW firewall configured and enabled"
 }
 
-# ========== Run All ==========
+# 12. Custom Security Checks (placeholder)
+custom_checks() {
+    section "Custom Security Checks"
+    log "No custom checks defined yet. You can add checks here."
+}
+
+# 13. Optional: Email Alerts (disabled)
+send_alerts() {
+    # Placeholder function
+    log "Email alerting not configured. You may integrate sendmail/mailx here."
+}
+
+# Main Function
 main() {
+    section "Linux Security Audit and Hardening Report"
     user_group_audit
     permissions_audit
     service_audit
-    firewall_network_audit
+    firewall_check
     ip_check
     check_updates
     monitor_logs
@@ -149,7 +189,8 @@ main() {
     disable_ipv6
     secure_bootloader
     configure_firewall
-    output_and_report "Security audit and hardening complete. Report saved to $REPORT_FILE"
+    custom_checks
+    log "Audit complete. Report saved to: $REPORT"
 }
 
 main
