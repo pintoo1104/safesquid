@@ -52,75 +52,55 @@ user_audit() {
     log_and_print "\n→ Total groups: $(echo "$groups" | wc -l)"
 }
 
-# 2. File and Directory Permissions
+# 2. File and Directory Permissions Audit
 file_permission_audit() {
-    print_title "2. FILE AND DIRECTORY PERMISSIONS"
+    print_title "2. FILE AND DIRECTORY PERMISSIONS AUDIT"
 
-    section "Files and Directories with World-Writable Permissions"
-    world_writable_files=$(find / -xdev -type f -perm -0002 2>/dev/null)
+    section "World-writable Files and Directories"
+    world_writable_files=$(find / -xdev -type f -perm -002 2>/dev/null)
     log_and_print "$world_writable_files"
     log_and_print "\n→ Total world-writable files: $(echo "$world_writable_files" | wc -l)"
 
-    section "Checking for .ssh Directories with Secure Permissions"
-    ssh_dirs=$(find / -type d -name ".ssh" -exec ls -ld {} \; 2>/dev/null)
-    log_and_print "$ssh_dirs"
-    log_and_print "\n→ Total .ssh directories: $(echo "$ssh_dirs" | wc -l)"
-
-    section "Files with SUID or SGID Bits Set"
-    suid_sgid_files=$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null)
+    section "SSH Directories Permissions"
+    ssh_directories=$(find / -type d -name ".ssh" -exec ls -ld {} \;)
+    log_and_print "$ssh_directories"
+    
+    section "SUID/SGID Executables"
+    suid_sgid_files=$(find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -l {} \;)
     log_and_print "$suid_sgid_files"
     log_and_print "\n→ Total SUID/SGID files: $(echo "$suid_sgid_files" | wc -l)"
 }
 
-# 3. Service Audits
-service_audit() {
-    print_title "3. SERVICE AUDITS"
+# 3. Security Updates Check and Automatic Update
+security_updates_check() {
+    print_title "3. SECURITY UPDATES AND PATCHING"
 
-    section "Running Services"
-    running_services=$(systemctl list-units --type=service --state=running)
-    log_and_print "$running_services"
+    section "Checking for Available Security Updates"
+    available_updates=$(apt list --upgradable 2>/dev/null | grep -i security)
+    
+    if [ -n "$available_updates" ]; then
+        log_and_print "Security updates available:\n$available_updates"
+        log_and_print "\n→ Running security updates..."
+        sudo apt-get update -y
+        sudo apt-get upgrade -y --only-upgrade
+    else
+        log_and_print "No security updates available."
+    fi
 
-    section "Critical Services"
-    critical_services=$(systemctl list-units --type=service --state=running | grep -E 'sshd|iptables')
-    log_and_print "$critical_services"
-
-    section "Checking for Services Listening on Non-Standard Ports"
-    non_standard_ports=$(ss -tuln | grep -vE '22|80|443')
-    log_and_print "$non_standard_ports"
-    log_and_print "\n→ Total services on non-standard ports: $(echo "$non_standard_ports" | wc -l)"
-}
-
-# 6. Security Updates and Patching
-security_updates() {
-    print_title "6. SECURITY UPDATES AND PATCHING"
-
-    section "Available Security Updates"
-    available_updates=$(apt-get --just-print upgrade | grep -i "security")
-    log_and_print "$available_updates"
-    log_and_print "\n→ Total security updates available: $(echo "$available_updates" | wc -l)"
-
-    section "Ensure Automatic Updates are Enabled"
+    section "Checking Automatic Updates Configuration"
+    log_and_print "Checking if unattended-upgrades is active..."
     auto_update_status=$(systemctl is-active unattended-upgrades)
-    log_and_print "Automatic updates status: $auto_update_status"
-    if [[ "$auto_update_status" != "active" ]]; then
-        log_and_print "→ Warning: Automatic updates are not enabled."
+    
+    if [ "$auto_update_status" == "active" ]; then
+        log_and_print "Unattended-upgrades service is active."
     else
-        log_and_print "→ Automatic updates are enabled."
+        log_and_print "Unattended-upgrades service is NOT active."
+        log_and_print "Attempting to start unattended-upgrades..."
+        sudo systemctl start unattended-upgrades
     fi
-
-    # Check if automatic updates are working by examining logs
-    section "Unattended-upgrades Logs"
-    update_logs=$(cat /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null)
-    log_and_print "$update_logs"
-
-    # Apply security updates automatically
-    if [[ -n "$available_updates" ]]; then
-        section "Applying Security Updates"
-        sudo apt-get update && sudo apt-get upgrade -y
-        log_and_print "→ Security updates have been applied."
-    else
-        log_and_print "→ No security updates to apply."
-    fi
+    
+    log_and_print "Checking for automatic updates status..."
+    sudo unattended-upgrades --dry-run
 }
 
 # Main function to start the audit
@@ -130,15 +110,14 @@ main() {
     
     # Run the User and Group Audits
     user_audit
-
+    
     # Run the File and Directory Permissions Audit
     file_permission_audit
-
-    # Run the Service Audits
-    service_audit
-
-    # Run the Security Updates Check and Apply Updates
-    security_updates
+    
+    # Run the Security Updates and Patching Check
+    security_updates_check
+    
+    # Other audit sections can be added here
     
     echo -e "\n\033[1;32m=== Security Audit Completed ===\033[0m"
 }
