@@ -3,34 +3,31 @@
 # Trap for Ctrl+C to exit cleanly
 trap "tput cnorm; clear; exit" SIGINT
 
-# Colors
-RESET='\033[0m'
+# Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
+RESET='\033[0m'  # Reset color
 
-# Function to draw box
 draw_box() {
-  echo "+$(printf -- '-%.0s' $(seq 1 $1))+" 
+  echo -e "${BLUE}+$(printf -- '-%.0s' $(seq 1 $1))+$RESET"
 }
 
-# Function to draw section header
 draw_section() {
   draw_box 60
   printf "| %-58s |\n" "$1"
   draw_box 60
 }
 
-# Function to get memory and swap usage
+# Function to get memory usage
 get_memory_usage() {
   # Fetch memory details, ensuring they are integers
   read -r mem_total mem_used <<< $(free -m | awk '/Mem:/ {print $2, $3}')
   
   # Check if the values are numeric
-  if [[ ! "$mem_total" =~ ^[0-9]+$ ]] || [[ ! "$mem_used" =~ ^[0-9]+$ ]]; then
-    echo -e "${RED}Error: Invalid memory values${RESET}"
+  if ! [[ "$mem_total" =~ ^[0-9]+$ ]] || ! [[ "$mem_used" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}Error: Invalid memory values or free command failed${RESET}"
     return 1
   fi
 
@@ -44,7 +41,7 @@ get_memory_usage() {
   printf "| Memory:    [%-10s] %2d%%   Swap: %s |\n" "$(printf '#%.0s' $(seq 1 $((mem_percent / 10))))" "$mem_percent" "$swap_info"
 }
 
-# Function to get CPU and load usage
+# Function to get CPU usage
 get_cpu_usage() {
   cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print 100 - $8}')
   load_avg=$(uptime | awk -F'load average:' '{ print $2 }')
@@ -57,7 +54,7 @@ get_disk_usage() {
   disk_bar=$(printf '#%.0s' $(seq 1 $((disk_usage / 10))))
   disk_warn=""
   var_usage=$(df /var | awk 'END {print $5}' | tr -d '%')
-  [[ $var_usage -gt 80 ]] && disk_warn="${RED}Warning: /var $var_usage% used${RESET}"
+  [[ $var_usage -gt 80 ]] && disk_warn="Warning: /var $var_usage% used"
   printf "| Disk:      [%-10s] %2d%%   %-20s |\n" "$disk_bar" "$disk_usage" "$disk_warn"
 }
 
@@ -69,8 +66,8 @@ get_top_processes() {
   draw_box 60
 }
 
-# Function to get network stats
-get_network_usage() {
+# Function to get network information
+get_network_info() {
   draw_section "Network Monitoring"
   connections=$(ss -s | awk '/estab/ {print $4}')
   drops=$(netstat -s | grep -i "dropped" | head -n 1 | awk '{print $1}')
@@ -81,42 +78,31 @@ get_network_usage() {
   draw_box 60
 }
 
-# Function to get service statuses
-get_service_status() {
+# Function to get services status
+get_services_status() {
   draw_section "Services Status"
   for svc in sshd nginx iptables; do
-    systemctl is-active --quiet $svc && state="${GREEN}[RUNNING]${RESET}" || state="${RED}[STOPPED]${RESET}"
+    systemctl is-active --quiet $svc && state="[RUNNING]" || state="[STOPPED]"
     printf "| %-10s: %-10s |\n" "$svc" "$state"
   done
   draw_box 60
 }
 
+# Main loop
 while true; do
   clear
   tput civis  # Hide cursor
 
   # HEADER
-  draw_section "${CYAN}SYSTEM MONITOR DASHBOARD${RESET}"
+  draw_section "SYSTEM MONITOR DASHBOARD"
 
-  # Get CPU Usage
+  # Get CPU, Memory, Disk, Network, Services status
   get_cpu_usage
-
-  # Get Memory Usage
   get_memory_usage
-
-  # Get Disk Usage
   get_disk_usage
-
-  draw_box 60
-
-  # Get Top Processes
   get_top_processes
-
-  # Get Network Usage
-  get_network_usage
-
-  # Get Service Statuses
-  get_service_status
+  get_network_info
+  get_services_status
 
   # Footer
   echo -e "| Press [Q] to exit | Refreshing every 2s...         |"
