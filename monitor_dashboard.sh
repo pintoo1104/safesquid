@@ -15,12 +15,12 @@ draw_box() {
 }
 
 draw_section() {
-  # Ensure title is clean and doesn't contain numbers or unexpected formatting
   local section_title="$1"
   
+  # Use echo -e to properly interpret color codes
   echo -e "${BLUE}$(draw_box 60)${RESET}"
-  
-  # Ensure that the title doesn't get cut off and remains clean
+
+  # Print the title with proper formatting
   printf "| ${GREEN}%-58s${RESET} |\n" "$section_title"
   
   echo -e "${BLUE}$(draw_box 60)${RESET}"
@@ -28,22 +28,18 @@ draw_section() {
 
 # Function to get memory usage
 get_memory_usage() {
-  # Fetch memory details, ensuring they are integers
   read -r mem_total mem_used <<< $(free -m | awk '/Mem:/ {print $2, $3}')
   
-  # Check if the values are numeric
+  # Validate values
   if ! [[ "$mem_total" =~ ^[0-9]+$ ]] || ! [[ "$mem_used" =~ ^[0-9]+$ ]]; then
     echo -e "${RED}Error: Invalid memory values or free command failed${RESET}"
     return 1
   fi
 
-  # Calculate memory usage percentage
   mem_percent=$((mem_used * 100 / mem_total))
 
-  # Get swap information
   swap_info=$(free -h | awk '/Swap:/ {print $3 " / " $2}')
   
-  # Display memory and swap usage
   printf "| ${YELLOW}Memory:${RESET}    [%-10s] %2d%%   ${YELLOW}Swap:${RESET} %s |\n" "$(printf '#%.0s' $(seq 1 $((mem_percent / 10))))" "$mem_percent" "$swap_info"
 }
 
