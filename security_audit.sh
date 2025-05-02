@@ -7,9 +7,21 @@
 REPORT="security_audit_report.txt"
 > "$REPORT"
 
-# Environment Variable for APT (To avoid warnings related to stable CLI interface)
+# Set APT to non-interactive to avoid CLI warnings
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
+
+# Function to suppress any warnings or prompts from apt
+apt_update() {
+    apt-get update -q -y > /dev/null
+    apt-get upgrade -q -y > /dev/null
+}
+
+# Function to install packages without interactive prompts
+install_package() {
+    local package="$1"
+    apt-get install -y -q "$package" > /dev/null
+}
 
 print_title() {
     local title="$1"
@@ -119,8 +131,10 @@ security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
 
     section "Available updates"
-    apt update -qq > /dev/null
-    apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT"
+    apt_update
+
+    section "Security updates"
+    apt-get upgrade -q -y --only-upgrade | tee -a "$REPORT"
 
     section "Running unattended upgrade"
     apt-get install -y unattended-upgrades > /dev/null
