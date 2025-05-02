@@ -151,7 +151,7 @@ log_monitoring() {
     log_and_print "\n→ Total failed SSH login attempts: $(echo "$failed_logins" | wc -l)"
 
     section "Detailed Failed SSH login attempts"
-    detailed_failed_logins=$(grep "Failed password" /var/log/auth.log | awk '{print $1, $2, $3, $9, $11}' | sort | uniq)
+    detailed_failed_logins=$(grep "Failed password" /var/log/auth.log | awk '{print $1, $2, $3, $9, $11, $13}' | sort | uniq)
     log_and_print "$detailed_failed_logins"
     log_and_print "\n→ Total unique failed login attempts: $(echo "$detailed_failed_logins" | wc -l)"
 
