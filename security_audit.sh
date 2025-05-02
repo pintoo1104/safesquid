@@ -52,23 +52,24 @@ user_audit() {
     log_and_print "\n→ Total groups: $(echo "$groups" | wc -l)"
 }
 
-# 2. File and Directory Permissions Audit
-file_permission_audit() {
-    print_title "2. FILE AND DIRECTORY PERMISSIONS AUDIT"
+# 2. File and Directory Permissions
+file_permissions_check() {
+    print_title "2. FILE AND DIRECTORY PERMISSIONS"
 
-    section "World-writable Files and Directories"
-    world_writable_files=$(find / -xdev -type f -perm -002 2>/dev/null)
+    section "World-Writable Files and Directories"
+    world_writable_files=$(find / -type f -perm -0002 2>/dev/null)
     log_and_print "$world_writable_files"
     log_and_print "\n→ Total world-writable files: $(echo "$world_writable_files" | wc -l)"
 
-    section "SSH Directories Permissions"
-    ssh_directories=$(find / -type d -name ".ssh" -exec ls -ld {} \;)
-    log_and_print "$ssh_directories"
-    
-    section "SUID/SGID Executables"
-    suid_sgid_files=$(find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -l {} \;)
+    section "Checking .ssh Directories"
+    ssh_dirs=$(find /home -type d -name ".ssh" 2>/dev/null)
+    log_and_print "$ssh_dirs"
+    log_and_print "\n→ Total .ssh directories: $(echo "$ssh_dirs" | wc -l)"
+
+    section "Files with SUID or SGID Bits Set"
+    suid_sgid_files=$(find / -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null)
     log_and_print "$suid_sgid_files"
-    log_and_print "\n→ Total SUID/SGID files: $(echo "$suid_sgid_files" | wc -l)"
+    log_and_print "\n→ Total files with SUID/SGID: $(echo "$suid_sgid_files" | wc -l)"
 }
 
 # 3. Security Updates Check and Automatic Update
@@ -80,9 +81,11 @@ security_updates_check() {
     
     if [ -n "$available_updates" ]; then
         log_and_print "Security updates available:\n$available_updates"
-        log_and_print "\n→ Running security updates..."
-        sudo apt-get update -y
-        sudo apt-get upgrade -y --only-upgrade
+        
+        # Apply security updates automatically using unattended-upgrades
+        log_and_print "\n→ Attempting to apply security updates using unattended-upgrades..."
+        sudo unattended-upgrade -d
+        
     else
         log_and_print "No security updates available."
     fi
@@ -111,13 +114,11 @@ main() {
     # Run the User and Group Audits
     user_audit
     
-    # Run the File and Directory Permissions Audit
-    file_permission_audit
+    # Run the File and Directory Permissions Check
+    file_permissions_check
     
-    # Run the Security Updates and Patching Check
+    # Run the Security Updates Check and Automatic Update
     security_updates_check
-    
-    # Other audit sections can be added here
     
     echo -e "\n\033[1;32m=== Security Audit Completed ===\033[0m"
 }
