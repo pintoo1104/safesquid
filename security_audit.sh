@@ -27,7 +27,7 @@ user_group_audit() {
     awk -F: '($2 == "*" || $2 == "!") {print $1}' /etc/shadow
 }
 
-# File Permission Audit
+# File and Directory Permissions Audit
 permission_audit() {
     section "File and Directory Permissions"
     log "World-writable files:" && find / -xdev -type f -perm -0002 2>/dev/null
@@ -48,7 +48,7 @@ service_audit() {
     log "\nListening Ports:" && ss -tulnp
 }
 
-# Firewall & Network
+# Firewall & Network Audit
 firewall_network_audit() {
     section "Firewall and Network Audit"
     if command -v ufw >/dev/null; then
@@ -64,20 +64,20 @@ firewall_network_audit() {
     sysctl net.ipv6.conf.all.forwarding | tee -a "$REPORT_FILE"
 }
 
-# IP Checks
+# IP Configuration Audit
 ip_checks() {
     section "IP Configuration"
     ip -o addr show | awk '{print $2, $4}' | tee -a "$REPORT_FILE"
     log "\nPublic IPs:" && curl -s ifconfig.me | tee -a "$REPORT_FILE"
 }
 
-# Security Updates
+# Security Updates Check
 check_updates() {
     section "Security Updates"
     apt update -qq && apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT_FILE"
 }
 
-# Log Monitoring
+# Log Monitoring for Suspicious Entries
 log_monitoring() {
     section "Suspicious SSH Logins"
     journalctl -u ssh | grep -i "failed\|invalid" | tail -n 20 | tee -a "$REPORT_FILE"
@@ -92,7 +92,7 @@ ssh_hardening() {
     log "SSH hardened: root login disabled and password auth disabled."
 }
 
-# Disable IPv6
+# Disable IPv6 if not required
 disable_ipv6() {
     section "Disabling IPv6"
     sysctl -w net.ipv6.conf.all.disable_ipv6=1
@@ -102,10 +102,9 @@ disable_ipv6() {
     log "IPv6 disabled."
 }
 
-# GRUB Hardening
+# GRUB Bootloader Hardening
 secure_bootloader() {
     section "GRUB Bootloader Hardening"
-
     if ! command -v grub-mkpasswd-pbkdf2 >/dev/null; then
         log "Installing grub-common..."
         apt install -y grub-common
@@ -128,7 +127,7 @@ secure_bootloader() {
     log "GRUB password set."
 }
 
-# Unattended Updates
+# Automatic Updates Configuration
 setup_auto_updates() {
     section "Automatic Updates"
     apt install -y unattended-upgrades
@@ -136,7 +135,7 @@ setup_auto_updates() {
     log "Unattended upgrades configured."
 }
 
-# Run all
+# Main function to run the audit and hardening
 main() {
     user_group_audit
     permission_audit
