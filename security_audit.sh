@@ -112,6 +112,15 @@ security_updates() {
     section "Unattended-upgrades Logs"
     update_logs=$(cat /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null)
     log_and_print "$update_logs"
+
+    # Apply security updates automatically
+    if [[ -n "$available_updates" ]]; then
+        section "Applying Security Updates"
+        sudo apt-get update && sudo apt-get upgrade -y
+        log_and_print "→ Security updates have been applied."
+    else
+        log_and_print "→ No security updates to apply."
+    fi
 }
 
 # Main function to start the audit
@@ -128,7 +137,7 @@ main() {
     # Run the Service Audits
     service_audit
 
-    # Run the Security Updates Check
+    # Run the Security Updates Check and Apply Updates
     security_updates
     
     echo -e "\n\033[1;32m=== Security Audit Completed ===\033[0m"
