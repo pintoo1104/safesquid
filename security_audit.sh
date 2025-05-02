@@ -1,120 +1,68 @@
 #!/bin/bash
 
-# ========================
-# Linux Security Audit and Hardening Script
-# Author: Akshay
-# Description: Modular and reusable script to audit and harden Linux servers.
-# ========================
+# ==============================
+# Linux Security Audit Dashboard
+# ==============================
 
-REPORT_FILE="security_audit_report.txt"
-> "$REPORT_FILE"  # Clear previous report if any
+REPORT="security_audit_report.txt"
+> "$REPORT"
 
-# Function to log messages to both the console and the report file
-log() {
-    echo -e "$1" | tee -a "$REPORT_FILE"
+print_title() {
+    local title="$1"
+    echo -e "\n\033[1;34m========== $title ==========\033[0m"
+    echo -e "\n========== $title ==========" >> "$REPORT"
 }
 
-# Function for section headers in the report
+print_subtitle() {
+    echo -e "\n\033[1;32m-- $1 --\033[0m"
+    echo -e "\n-- $1 --" >> "$REPORT"
+}
+
+log_and_print() {
+    echo -e "$1"
+    echo -e "$1" >> "$REPORT"
+}
+
 section() {
-    log "\n==================== $1 ===================="
+    echo -e "\n+------------------------------------------------------------+"
+    echo -e "| $1"
+    echo -e "+------------------------------------------------------------+"
+    echo -e "\n+------------------------------------------------------------+" >> "$REPORT"
+    echo -e "| $1" >> "$REPORT"
+    echo -e "+------------------------------------------------------------+" >> "$REPORT"
 }
 
-# ========================
-# 1. User and Group Audit
-# ========================
+# 1. User and Group Audits
+user_audit() {
+    print_title "1. USER AND GROUP AUDIT"
 
-user_group_audit() {
-    section "User and Group Audit"
-    log "All Users:" && cut -d: -f1 /etc/passwd
-    log "\nUsers with UID 0 (non-root):"
-    awk -F: '($3 == 0 && $1 != "root") {print $1}' /etc/passwd
-    log "\nUsers without passwords:"
-    awk -F: '($2 == "*" || $2 == "!") {print $1}' /etc/shadow
+    section "Users with UID 0 (root access)"
+    root_users=$(getent passwd | awk -F: '$3 == 0 {print $1}')
+    log_and_print "$root_users"
+    log_and_print "\n→ Total users with UID 0: $(echo "$root_users" | wc -l)"
+
+    section "Users with no password set (potential risk)"
+    no_pass=$(getent passwd | cut -d: -f1 | xargs -n1 -I{} sudo passwd -S {} 2>/dev/null | grep -E "NP|!!")
+    log_and_print "$no_pass"
+    log_and_print "\n→ Total users without password: $(echo "$no_pass" | wc -l)"
+
+    section "All Local Groups"
+    groups=$(cut -d: -f1 /etc/group)
+    log_and_print "$groups"
+    log_and_print "\n→ Total groups: $(echo "$groups" | wc -l)"
 }
 
-# ========================
-# 2. File Permission Audit
-# ========================
-
-permission_audit() {
-    section "File and Directory Permissions"
-    log "World-writable files:" && find / -xdev -type f -perm -0002 2>/dev/null
-    log "\nWorld-writable directories:" && find / -xdev -type d -perm -0002 2>/dev/null
-    log "\nSUID/SGID Files:" && find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null
-}
-
-# ========================
-# 3. Service Audit
-# ========================
-
-service_audit() {
-    section "Service Audit"
-    log "Active Services:" && systemctl list-units --type=service --state=active
-    log "\nListening Ports:" && ss -tulnp
-}
-
-# ========================
-# 4. Firewall & Network Security
-# ========================
-
-firewall_network_audit() {
-    section "Firewall and Network Audit"
-    if command -v ufw >/dev/null; then
-        ufw status verbose | tee -a "$REPORT_FILE"
-    elif command -v iptables >/dev/null; then
-        iptables -L -n -v | tee -a "$REPORT_FILE"
-    else
-        log "No firewall found."
-    fi
-
-    log "\nIP Forwarding:"
-    sysctl net.ipv4.ip_forward | tee -a "$REPORT_FILE"
-    sysctl net.ipv6.conf.all.forwarding | tee -a "$REPORT_FILE"
-}
-
-# ========================
-# 5. IP and Network Configuration
-# ========================
-
-ip_checks() {
-    section "IP Configuration"
-    ip -o addr show | awk '{print $2, $4}' | tee -a "$REPORT_FILE"
-    log "\nPublic IPs:" && curl -s ifconfig.me | tee -a "$REPORT_FILE"
-}
-
-# ========================
-# 6. Security Updates
-# ========================
-
-check_updates() {
-    section "Security Updates"
-    apt update -qq && apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT_FILE"
-}
-
-# ========================
-# 7. Log Monitoring
-# ========================
-
-log_monitoring() {
-    section "Suspicious SSH Logins"
-    journalctl -u ssh | grep -i "failed\|invalid" | tail -n 20 | tee -a "$REPORT_FILE"
-}
-
-# ========================
-# Main Function to Run All Audits
-# ========================
-
+# Main function to start the audit
 main() {
-    user_group_audit
-    permission_audit
-    service_audit
-    firewall_network_audit
-    ip_checks
-    check_updates
-    log_monitoring
-
-    section "Summary"
-    log "Audit and hardening complete. Review $REPORT_FILE for full details."
+    clear
+    echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
+    
+    # Run the User and Group Audits
+    user_audit
+    
+    # Future calls for other sections will go here
+    
+    echo -e "\n\033[1;32m=== Security Audit Completed ===\033[0m"
 }
 
 main
