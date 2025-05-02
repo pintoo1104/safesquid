@@ -13,38 +13,28 @@ export APT_LISTCHANGES_FRONTEND=none
 # ----------- Utility Functions ------------
 
 apt_update() {
-    apt-get update -q -y > /dev/null
-    apt-get upgrade -q -y > /dev/null
+    apt-get update -q -y >> "$REPORT" 2>&1
+    apt-get upgrade -q -y >> "$REPORT" 2>&1
 }
 
 install_package() {
     local package="$1"
-    apt-get install -y -q "$package" > /dev/null
+    apt-get install -y -q "$package" >> "$REPORT" 2>&1
 }
 
 print_title() {
     local title="$1"
-    echo -e "\n\033[1;34m========== $title ==========\033[0m"
-    echo -e "\n========== $title ==========" >> "$REPORT"
+    echo -e "\n========== $title ==========\n" | tee -a "$REPORT"
 }
 
-print_subtitle() {
-    echo -e "\n\033[1;32m-- $1 --\033[0m"
-    echo -e "\n-- $1 --" >> "$REPORT"
+print_section() {
+    local title="$1"
+    echo -e "\n-- $title --\n" | tee -a "$REPORT"
 }
 
-log_and_print() {
-    echo -e "$1"
-    echo -e "$1" >> "$REPORT"
-}
-
-section() {
-    echo -e "\n+------------------------------------------------------------+"
-    echo -e "| $1"
-    echo -e "+------------------------------------------------------------+"
-    echo -e "\n+------------------------------------------------------------+" >> "$REPORT"
-    echo -e "| $1" >> "$REPORT"
-    echo -e "+------------------------------------------------------------+" >> "$REPORT"
+log_command() {
+    echo -e "\n\$ $1" >> "$REPORT"
+    eval "$1" >> "$REPORT" 2>&1
 }
 
 # ----------- 1. User and Group Audit ------------
@@ -52,17 +42,17 @@ section() {
 user_audit() {
     print_title "1. USER AND GROUP AUDIT"
 
-    section "Users with UID 0 (root access)"
-    getent passwd | awk -F: '$3 == 0 {print $1}' | log_and_print
+    print_section "Users with UID 0 (root access)"
+    log_command "getent passwd | awk -F: '\$3 == 0 {print \$1}'"
 
-    section "Users without password"
-    awk -F: '($2 == "" || $2 == "!" || $2 == "*") {print $1}' /etc/shadow | log_and_print
+    print_section "Users without passwords or disabled accounts"
+    log_command "awk -F: '(\$2 == \"\" || \$2 == \"!\" || \$2 == \"*\") {print \$1}' /etc/shadow"
 
-    section "All Local Users"
-    cut -d: -f1 /etc/passwd | log_and_print
+    print_section "All Local Users"
+    log_command "cut -d: -f1 /etc/passwd"
 
-    section "All Local Groups"
-    cut -d: -f1 /etc/group | log_and_print
+    print_section "All Local Groups"
+    log_command "cut -d: -f1 /etc/group"
 }
 
 # ----------- 2. File and Directory Permissions ------------
@@ -70,14 +60,14 @@ user_audit() {
 file_perm_audit() {
     print_title "2. FILE AND DIRECTORY PERMISSIONS"
 
-    section "World-writable files and directories"
-    find / -xdev -type f -perm -0002 -ls 2>/dev/null | tee -a "$REPORT"
+    print_section "World-writable files and directories"
+    log_command "find / -xdev -type f -perm -0002 -ls 2>/dev/null"
 
-    section "Check .ssh directories for permissions"
-    find /home -name ".ssh" -exec ls -ld {} \; 2>/dev/null | tee -a "$REPORT"
+    print_section ".ssh directories and permissions"
+    log_command "find /home -name '.ssh' -exec ls -ld {} \; 2>/dev/null"
 
-    section "Files with SUID/SGID"
-    find / -xdev \( -perm -4000 -o -perm -2000 \) -type f -ls 2>/dev/null | tee -a "$REPORT"
+    print_section "Files with SUID/SGID"
+    log_command "find / -xdev \\( -perm -4000 -o -perm -2000 \\) -type f -ls 2>/dev/null"
 }
 
 # ----------- 3. Service Audits ------------
@@ -85,20 +75,17 @@ file_perm_audit() {
 service_audit() {
     print_title "3. SERVICE AUDIT"
 
-    section "Running services"
-    systemctl list-units --type=service --state=running | tee -a "$REPORT"
+    print_section "Running services"
+    log_command "systemctl list-units --type=service --state=running"
 
-    section "Critical services check"
+    print_section "Critical services (sshd, ufw, iptables)"
     for svc in sshd ufw iptables; do
-        if systemctl is-active --quiet "$svc"; then
-            log_and_print "$svc is running"
-        else
-            log_and_print "$svc is NOT running"
-        fi
+        echo -e "\nService: $svc" >> "$REPORT"
+        systemctl is-active "$svc" >> "$REPORT" 2>&1
     done
 
-    section "Check for services on non-standard ports"
-    ss -tulpn | grep -vE '(:22|:80|:443)' | tee -a "$REPORT"
+    print_section "Services listening on non-standard ports"
+    log_command "ss -tulpn | grep -vE '(:22|:80|:443)'"
 }
 
 # ----------- 4. Firewall & Network Security ------------
@@ -106,26 +93,26 @@ service_audit() {
 network_audit() {
     print_title "4. FIREWALL & NETWORK SECURITY"
 
-    section "Firewall status"
-    ufw status verbose | tee -a "$REPORT"
+    print_section "Firewall (ufw) status"
+    log_command "ufw status verbose"
 
-    section "Open ports"
-    ss -tuln | tee -a "$REPORT"
+    print_section "Open ports"
+    log_command "ss -tuln"
 
-    section "IP forwarding status"
-    sysctl net.ipv4.ip_forward | tee -a "$REPORT"
+    print_section "IP Forwarding Status"
+    log_command "sysctl net.ipv4.ip_forward"
 }
 
 # ----------- 5. IP Configuration & Type ------------
 
 ip_audit() {
-    print_title "5. PUBLIC vs PRIVATE IP CHECK"
+    print_title "5. PUBLIC vs PRIVATE IP AUDIT"
 
-    section "IP address summary"
-    ip -4 a | tee -a "$REPORT"
+    print_section "IP Address (Local)"
+    log_command "ip -4 a"
 
-    section "Public IP check"
-    curl -s ifconfig.me | tee -a "$REPORT"
+    print_section "Public IP (external)"
+    log_command "curl -s ifconfig.me"
 }
 
 # ----------- 6. Security Updates & Patch Check ------------
@@ -133,12 +120,12 @@ ip_audit() {
 security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
 
-    section "System updates"
+    print_section "System package updates"
     apt_update
 
-    section "Running unattended upgrade"
+    print_section "Unattended-upgrades dry run"
     install_package unattended-upgrades
-    unattended-upgrade -d --dry-run | tee -a "$REPORT"
+    log_command "unattended-upgrade -d --dry-run"
 }
 
 # ----------- 7. Log Monitoring ------------
@@ -146,39 +133,37 @@ security_updates() {
 log_monitoring() {
     print_title "7. LOG MONITORING"
 
-    section "SSH login attempts from auth.log"
-    grep -E "Failed|Accepted" /var/log/auth.log | tail -n 50 | tee -a "$REPORT"
+    print_section "SSH login attempts (last 50 lines from auth.log)"
+    log_command "grep -E 'Failed|Accepted' /var/log/auth.log | tail -n 50"
 }
 
-# ----------- 8. Hardening Steps ------------
+# ----------- 8. Server Hardening ------------
 
 hardening_steps() {
-    print_title "8. SERVER HARDENING"
+    print_title "8. SERVER HARDENING MEASURES"
 
-    section "SSH Hardening"
-    sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-    systemctl restart sshd
-    log_and_print "✅ SSH hardened: root login & password auth disabled"
+    print_section "Disabling root SSH and password authentication"
+    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+    log_command "systemctl restart sshd"
 
-    section "Disable IPv6"
+    print_section "Disabling IPv6"
     echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
     echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-    sysctl -p | tee -a "$REPORT"
+    log_command "sysctl -p"
 
-    section "Secure GRUB Bootloader with Password"
-    read -s -p "Enter GRUB password: " grub_plain
+    print_section "Securing GRUB with Password"
+    read -s -p "Enter GRUB password: " grub_pass1
     echo
-    read -s -p "Confirm GRUB password: " grub_confirm
+    read -s -p "Confirm GRUB password: " grub_pass2
     echo
 
-    if [[ "$grub_plain" != "$grub_confirm" ]]; then
-        log_and_print "❌ GRUB password mismatch. Skipping GRUB protection."
+    if [[ "$grub_pass1" != "$grub_pass2" ]]; then
+        echo "❌ GRUB password mismatch. Skipping setup." | tee -a "$REPORT"
     else
-        grub_hash=$(echo -e "$grub_plain\n$grub_plain" | grub-mkpasswd-pbkdf2 | grep 'grub.pbkdf2' | awk '{print $7}')
-
-        sed -i '/set superusers=/d' /etc/grub.d/40_custom 2>/dev/null
-        sed -i '/password_pbkdf2 root/d' /etc/grub.d/40_custom 2>/dev/null
+        grub_hash=$(echo -e "$grub_pass1\n$grub_pass1" | grub-mkpasswd-pbkdf2 | grep 'grub.pbkdf2' | awk '{print $7}')
+        sed -i '/set superusers=/d' /etc/grub.d/40_custom
+        sed -i '/password_pbkdf2 root/d' /etc/grub.d/40_custom
 
         cat <<EOF >> /etc/grub.d/40_custom
 
@@ -187,18 +172,17 @@ password_pbkdf2 root $grub_hash
 EOF
 
         chmod 600 /etc/grub.d/40_custom
-        update-grub
-        log_and_print "✅ GRUB bootloader secured with password."
+        log_command "update-grub"
     fi
 
-    section "Firewall rules setup"
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw allow 22
-    ufw --force enable
-    log_and_print "✅ Firewall (ufw) configured and enabled"
+    print_section "Configure firewall (UFW)"
+    install_package ufw
+    ufw default deny incoming >> "$REPORT" 2>&1
+    ufw default allow outgoing >> "$REPORT" 2>&1
+    ufw allow 22 >> "$REPORT" 2>&1
+    ufw --force enable >> "$REPORT" 2>&1
 
-    section "Enable Automatic Updates"
+    print_section "Enable Unattended Upgrades"
     install_package unattended-upgrades
     cat <<EOF > /etc/apt/apt.conf.d/10periodic
 APT::Periodic::Update-Package-Lists "1";
@@ -210,14 +194,14 @@ EOF
 Unattended-Upgrade::Automatic-Reboot "true";
 EOF
 
-    unattended-upgrade -d > /dev/null
-    log_and_print "✅ Automatic security updates enabled"
+    log_command "unattended-upgrade -d"
 }
 
-# ----------- Main ------------
+# ----------- MAIN ------------
+
 main() {
     clear
-    echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
+    echo "=== Starting Linux Security Audit ==="
     user_audit
     file_perm_audit
     service_audit
@@ -226,7 +210,7 @@ main() {
     security_updates
     log_monitoring
     hardening_steps
-    echo -e "\n\033[1;32m=== Audit Completed. Report saved to $REPORT ===\033[0m"
+    echo -e "\n✅ Audit completed. Full report saved to: $REPORT"
 }
 
 main
