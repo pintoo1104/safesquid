@@ -15,9 +15,9 @@ draw_box() {
 }
 
 draw_section() {
-  draw_box 60
-  printf "| %-58s |\n" "$1"
-  draw_box 60
+  echo -e "${BLUE}$(draw_box 60)${RESET}"
+  printf "| ${GREEN}%-58s${RESET} |\n" "$1"
+  echo -e "${BLUE}$(draw_box 60)${RESET}"
 }
 
 # Function to get memory usage
@@ -38,14 +38,14 @@ get_memory_usage() {
   swap_info=$(free -h | awk '/Swap:/ {print $3 " / " $2}')
   
   # Display memory and swap usage
-  printf "| Memory:    [%-10s] %2d%%   Swap: %s |\n" "$(printf '#%.0s' $(seq 1 $((mem_percent / 10))))" "$mem_percent" "$swap_info"
+  printf "| ${YELLOW}Memory:${RESET}    [%-10s] %2d%%   ${YELLOW}Swap:${RESET} %s |\n" "$(printf '#%.0s' $(seq 1 $((mem_percent / 10))))" "$mem_percent" "$swap_info"
 }
 
 # Function to get CPU usage
 get_cpu_usage() {
   cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print 100 - $8}')
   load_avg=$(uptime | awk -F'load average:' '{ print $2 }')
-  printf "| CPU Usage: [%-10s] %2.0f%%   Load Avg:%s |\n" "$(printf '#%.0s' $(seq 1 $((cpu_usage / 10))))" "$cpu_usage" "$load_avg"
+  printf "| ${YELLOW}CPU Usage:${RESET} [%-10s] %2.0f%%   ${YELLOW}Load Avg:${RESET} %s |\n" "$(printf '#%.0s' $(seq 1 $((cpu_usage / 10))))" "$cpu_usage" "$load_avg"
 }
 
 # Function to get disk usage
@@ -55,32 +55,32 @@ get_disk_usage() {
   disk_warn=""
   var_usage=$(df /var | awk 'END {print $5}' | tr -d '%')
   [[ $var_usage -gt 80 ]] && disk_warn="Warning: /var $var_usage% used"
-  printf "| Disk:      [%-10s] %2d%%   %-20s |\n" "$disk_bar" "$disk_usage" "$disk_warn"
+  printf "| ${YELLOW}Disk:${RESET}      [%-10s] %2d%%   %-20s |\n" "$disk_bar" "$disk_usage" "$disk_warn"
 }
 
 # Function to get top processes
 get_top_processes() {
-  draw_section "Top Processes (CPU & Mem)"
-  printf "| %-3s | %-15s | %-8s | %-10s |\n" "#" "Process Name" "CPU (%)" "Memory (MB)"
+  draw_section "${GREEN}Top Processes (CPU & Mem)${RESET}"
+  printf "| ${GREEN}%-3s${RESET} | ${GREEN}%-15s${RESET} | ${GREEN}%-8s${RESET} | ${GREEN}%-10s${RESET} |\n" "#" "Process Name" "CPU (%)" "Memory (MB)"
   ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 6 | tail -n 5 | awk '{printf "| %-3d | %-15s | %-8s | %-10s |\n", NR, $2, $3, int($4 * 16)}'
   draw_box 60
 }
 
 # Function to get network information
 get_network_info() {
-  draw_section "Network Monitoring"
+  draw_section "${GREEN}Network Monitoring${RESET}"
   connections=$(ss -s | awk '/estab/ {print $4}')
   drops=$(netstat -s | grep -i "dropped" | head -n 1 | awk '{print $1}')
   in_data=$(ifconfig | grep "RX bytes" | awk '{print $2}' | awk -F: '{sum+=$2} END {printf "%.2f GB", sum/1024/1024}')
   out_data=$(ifconfig | grep "TX bytes" | awk '{print $6}' | awk -F: '{sum+=$2} END {printf "%.2f GB", sum/1024/1024}')
-  printf "| Active Connections: %-4s | Packet Drops: %-4s |\n" "$connections" "$drops"
-  printf "| Data In: %-10s | Data Out: %-10s |\n" "$in_data" "$out_data"
+  printf "| ${YELLOW}Active Connections:${RESET} %-4s | ${YELLOW}Packet Drops:${RESET} %-4s |\n" "$connections" "$drops"
+  printf "| ${YELLOW}Data In:${RESET} %-10s | ${YELLOW}Data Out:${RESET} %-10s |\n" "$in_data" "$out_data"
   draw_box 60
 }
 
 # Function to get services status
 get_services_status() {
-  draw_section "Services Status"
+  draw_section "${GREEN}Services Status${RESET}"
   for svc in sshd nginx iptables; do
     systemctl is-active --quiet $svc && state="[RUNNING]" || state="[STOPPED]"
     printf "| %-10s: %-10s |\n" "$svc" "$state"
@@ -94,7 +94,7 @@ while true; do
   tput civis  # Hide cursor
 
   # HEADER
-  draw_section "SYSTEM MONITOR DASHBOARD"
+  draw_section "${BLUE}SYSTEM MONITOR DASHBOARD${RESET}"
 
   # Get CPU, Memory, Disk, Network, Services status
   get_cpu_usage
@@ -105,7 +105,7 @@ while true; do
   get_services_status
 
   # Footer
-  echo -e "| Press [Q] to exit | Refreshing every 2s...         |"
+  echo -e "| ${YELLOW}Press [Q] to exit${RESET} | ${GREEN}Refreshing every 2s...${RESET}         |"
   draw_box 60
 
   # Read keypress with timeout
