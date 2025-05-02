@@ -11,10 +11,6 @@ REPORT="security_audit_report.txt"
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 
-# Suppress warnings related to APT's unstable CLI interface
-export APT::Get::Assume-Yes=true
-export APT::Get::AllowUnauthenticated=true
-
 # Function to suppress any warnings or prompts from apt
 apt_update() {
     apt-get update -q -y > /dev/null
@@ -184,7 +180,19 @@ hardening_steps() {
 
     section "Enable automatic updates"
     apt install -y unattended-upgrades > /dev/null
-    dpkg-reconfigure --frontend=noninteractive unattended-upgrades
+
+    # Directly modify the configuration file for automatic updates
+    echo "APT::Periodic::Update-Package-Lists \"1\";" > /etc/apt/apt.conf.d/10periodic
+    echo "APT::Periodic::Unattended-Upgrade \"1\";" >> /etc/apt/apt.conf.d/10periodic
+    echo "APT::Periodic::AutocleanInterval \"7\";" >> /etc/apt/apt.conf.d/10periodic
+
+    # Set automatic updates for security upgrades
+    echo "Unattended-Upgrade::Automatic-Reboot 'true';" > /etc/apt/apt.conf.d/20auto-upgrades
+    echo "Unattended-Upgrade::Allowed-Origins::${distro_id} ${distro_codename}-security;" >> /etc/apt/apt.conf.d/20auto-upgrades
+
+    # Manually trigger unattended-upgrades without reconfigure (bypassing the warning)
+    unattended-upgrade -d > /dev/null
+
     log_and_print "→ Automatic security updates enabled"
 }
 
