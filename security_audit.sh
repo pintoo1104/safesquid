@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# ========================
+# ============================
 # Linux Security Audit and Hardening Script
 # Author: Akshay
-# Description: Modular and reusable script to audit and harden Linux servers.
-# ========================
+# ============================
 
+# Output report file
 REPORT_FILE="security_audit_report.txt"
 > "$REPORT_FILE"
 
@@ -17,17 +17,19 @@ section() {
     log "\n==================== $1 ===================="
 }
 
+# ==========================
 # User and Group Audit
+# ==========================
 user_group_audit() {
     section "User and Group Audit"
     log "All Users:" && cut -d: -f1 /etc/passwd
-    log "\nUsers with UID 0 (non-root):"
-    awk -F: '($3 == 0 && $1 != "root") {print $1}' /etc/passwd
-    log "\nUsers without passwords:"
-    awk -F: '($2 == "*" || $2 == "!") {print $1}' /etc/shadow
+    log "\nUsers with UID 0 (non-root):" && awk -F: '($3 == 0 && $1 != "root") {print $1}' /etc/passwd
+    log "\nUsers without passwords:" && awk -F: '($2 == "*" || $2 == "!") {print $1}' /etc/shadow
 }
 
+# ==========================
 # File and Directory Permissions Audit
+# ==========================
 permission_audit() {
     section "File and Directory Permissions"
     log "World-writable files:" && find / -xdev -type f -perm -0002 2>/dev/null
@@ -35,20 +37,18 @@ permission_audit() {
     log "\nSUID/SGID Files:" && find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null
 }
 
-# SSH and .ssh Directory Audit
-ssh_audit() {
-    section "SSH and .ssh Directory Audit"
-    find /home -name ".ssh" -exec ls -ld {} \; 2>/dev/null
-}
-
+# ==========================
 # Service Audit
+# ==========================
 service_audit() {
     section "Service Audit"
     log "Active Services:" && systemctl list-units --type=service --state=active
     log "\nListening Ports:" && ss -tulnp
 }
 
-# Firewall & Network Audit
+# ==========================
+# Firewall and Network Audit
+# ==========================
 firewall_network_audit() {
     section "Firewall and Network Audit"
     if command -v ufw >/dev/null; then
@@ -64,26 +64,34 @@ firewall_network_audit() {
     sysctl net.ipv6.conf.all.forwarding | tee -a "$REPORT_FILE"
 }
 
-# IP Configuration Audit
+# ==========================
+# IP and Network Configuration
+# ==========================
 ip_checks() {
     section "IP Configuration"
     ip -o addr show | awk '{print $2, $4}' | tee -a "$REPORT_FILE"
     log "\nPublic IPs:" && curl -s ifconfig.me | tee -a "$REPORT_FILE"
 }
 
-# Security Updates Check
+# ==========================
+# Security Updates
+# ==========================
 check_updates() {
     section "Security Updates"
     apt update -qq && apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT_FILE"
 }
 
-# Log Monitoring for Suspicious Entries
+# ==========================
+# Log Monitoring
+# ==========================
 log_monitoring() {
     section "Suspicious SSH Logins"
     journalctl -u ssh | grep -i "failed\|invalid" | tail -n 20 | tee -a "$REPORT_FILE"
 }
 
+# ==========================
 # SSH Hardening
+# ==========================
 ssh_hardening() {
     section "SSH Hardening"
     sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
@@ -92,7 +100,9 @@ ssh_hardening() {
     log "SSH hardened: root login disabled and password auth disabled."
 }
 
-# Disable IPv6 if not required
+# ==========================
+# Disable IPv6
+# ==========================
 disable_ipv6() {
     section "Disabling IPv6"
     sysctl -w net.ipv6.conf.all.disable_ipv6=1
@@ -102,7 +112,9 @@ disable_ipv6() {
     log "IPv6 disabled."
 }
 
-# GRUB Bootloader Hardening
+# ==========================
+# GRUB Hardening
+# ==========================
 secure_bootloader() {
     section "GRUB Bootloader Hardening"
     if ! command -v grub-mkpasswd-pbkdf2 >/dev/null; then
@@ -127,7 +139,9 @@ secure_bootloader() {
     log "GRUB password set."
 }
 
-# Automatic Updates Configuration
+# ==========================
+# Automatic Updates
+# ==========================
 setup_auto_updates() {
     section "Automatic Updates"
     apt install -y unattended-upgrades
@@ -135,11 +149,12 @@ setup_auto_updates() {
     log "Unattended upgrades configured."
 }
 
-# Main function to run the audit and hardening
+# ==========================
+# Run all audits and hardening
+# ==========================
 main() {
     user_group_audit
     permission_audit
-    ssh_audit
     service_audit
     firewall_network_audit
     ip_checks
