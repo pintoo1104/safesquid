@@ -16,8 +16,8 @@ draw_box() {
 
 draw_section() {
   local section_title="$1"
-  
-  # Use echo -e to properly interpret color codes
+
+  # Use echo -e to interpret color codes
   echo -e "${BLUE}$(draw_box 60)${RESET}"
 
   # Print the title with proper formatting
