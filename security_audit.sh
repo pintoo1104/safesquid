@@ -128,6 +128,25 @@ network_configuration() {
     fi
 }
 
+# 6. Security Updates and Patching
+security_updates() {
+    print_title "6. SECURITY UPDATES AND PATCHING"
+
+    section "Available Security Updates"
+    available_updates=$(apt-get --just-print upgrade | grep -i "security")
+    log_and_print "$available_updates"
+    log_and_print "\n→ Total security updates available: $(echo "$available_updates" | wc -l)"
+
+    section "Ensure Automatic Updates are Enabled"
+    auto_update_status=$(systemctl is-active unattended-upgrades)
+    log_and_print "Automatic updates status: $auto_update_status"
+    if [[ "$auto_update_status" != "active" ]]; then
+        log_and_print "→ Warning: Automatic updates are not enabled."
+    else
+        log_and_print "→ Automatic updates are enabled."
+    fi
+}
+
 # Main function to start the audit
 main() {
     clear
@@ -144,6 +163,9 @@ main() {
 
     # Run the IP and Network Configuration Checks
     network_configuration
+
+    # Run the Security Updates and Patching audit
+    security_updates
 
     # Future calls for other sections will go here
 
