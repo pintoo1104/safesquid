@@ -1,179 +1,136 @@
 #!/bin/bash
 
-# ======================================
-# Linux Security Audit and Hardening
-# ======================================
+# ===============================
+# Linux Security Audit & Hardening
+# ===============================
 
 REPORT="security_audit_report.txt"
+CUSTOM_CONF="custom_checks.conf"
+EMAIL="akshay.bendke12@gmail.com"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
 > "$REPORT"
 
-# Set APT to non-interactive to avoid CLI warnings
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 
-# Function to suppress any warnings or prompts from apt
 apt_update() {
-    apt-get update -q -y > /dev/null
-    apt-get upgrade -q -y > /dev/null
+    apt-get update -qq -y > /dev/null
+    apt-get upgrade -qq -y > /dev/null
 }
 
-# Function to install packages without interactive prompts
 install_package() {
     local package="$1"
-    apt-get install -y -q "$package" > /dev/null
+    dpkg -s "$package" &> /dev/null || apt-get install -qq -y "$package" > /dev/null
 }
 
 print_title() {
-    local title="$1"
-    echo -e "\n\033[1;34m========== $title ==========\033[0m"
-    echo -e "\n========== $title ==========" >> "$REPORT"
-}
-
-print_subtitle() {
-    echo -e "\n\033[1;32m-- $1 --\033[0m"
-    echo -e "\n-- $1 --" >> "$REPORT"
+    echo -e "\n========== $1 ==========" | tee -a "$REPORT"
 }
 
 log_and_print() {
-    echo -e "$1"
-    echo -e "$1" >> "$REPORT"
+    echo -e "$1" | tee -a "$REPORT"
 }
 
 section() {
-    echo -e "\n+------------------------------------------------------------+"
-    echo -e "| $1"
-    echo -e "+------------------------------------------------------------+"
-    echo -e "\n+------------------------------------------------------------+" >> "$REPORT"
-    echo -e "| $1" >> "$REPORT"
-    echo -e "+------------------------------------------------------------+" >> "$REPORT"
+    echo -e "\n+------------------------------------------------------------+" | tee -a "$REPORT"
+    echo -e "| $1" | tee -a "$REPORT"
+    echo -e "+------------------------------------------------------------+" | tee -a "$REPORT"
 }
 
 # 1. User and Group Audits
 user_audit() {
     print_title "1. USER AND GROUP AUDIT"
-
-    section "Users with UID 0 (root access)"
-    root_users=$(getent passwd | awk -F: '$3 == 0 {print $1}')
-    log_and_print "$root_users"
-
+    section "Users with UID 0"
+    getent passwd | awk -F: '$3 == 0 {print $1}' | tee -a "$REPORT"
     section "Users without password"
-    no_pass=$(sudo awk -F: '($2 == "" || $2 == "!" || $2 == "*") {print $1}' /etc/shadow)
-    log_and_print "$no_pass"
-
-    section "All Local Users"
-    cut -d: -f1 /etc/passwd | log_and_print
-
-    section "All Local Groups"
-    cut -d: -f1 /etc/group | log_and_print
-
-    # Check for users with sudo access
-    section "Users with sudo privileges"
-    sudo_users=$(getent passwd | grep -E '^(.*:.*:.*:.*:.*:.*:(.*sudo.*))' | cut -d: -f1)
-    log_and_print "$sudo_users"
+    awk -F: '($2 == "" || $2 == "!" || $2 == "*") {print $1}' /etc/shadow | tee -a "$REPORT"
+    section "All Users"
+    cut -d: -f1 /etc/passwd | tee -a "$REPORT"
+    section "All Groups"
+    cut -d: -f1 /etc/group | tee -a "$REPORT"
+    section "Users with sudo"
+    getent group sudo | cut -d: -f4 | tr ',' '\n' | tee -a "$REPORT"
 }
 
-# 2. File and Directory Permissions
+# 2. File Permissions
 file_perm_audit() {
     print_title "2. FILE AND DIRECTORY PERMISSIONS"
-
-    section "World-writable files and directories"
+    section "World-writable Files"
     find / -xdev -type f -perm -0002 -ls 2>/dev/null | tee -a "$REPORT"
-
-    section "Check .ssh directories for permissions"
+    section ".ssh Directory Permissions"
     find /home -name ".ssh" -exec ls -ld {} \; 2>/dev/null | tee -a "$REPORT"
-
     section "Files with SUID/SGID"
     find / -xdev \( -perm -4000 -o -perm -2000 \) -type f -ls 2>/dev/null | tee -a "$REPORT"
 }
 
-# 3. Service Audits
+# 3. Service Audit
 service_audit() {
     print_title "3. SERVICE AUDIT"
-
-    section "Running services"
+    section "Running Services"
     systemctl list-units --type=service --state=running | tee -a "$REPORT"
-
-    section "Critical services check"
-    for svc in sshd ufw iptables; do
-        if systemctl is-active --quiet $svc; then
-            log_and_print "$svc is running"
-        else
-            log_and_print "$svc is NOT running"
-        fi
+    section "Critical Services"
+    for svc in ssh ufw iptables; do
+        systemctl is-active --quiet "$svc" && log_and_print "$svc is running" || log_and_print "$svc is NOT running"
     done
-
-    section "Check for services on non-standard ports"
+    section "Non-Standard Ports"
     ss -tulpn | grep -vE '(:22|:80|:443)' | tee -a "$REPORT"
 }
 
-# 4. Firewall and Network Security
+# 4. Firewall and Network
 network_audit() {
     print_title "4. FIREWALL & NETWORK SECURITY"
-
-    section "Firewall status"
+    section "Firewall Status"
     ufw status verbose | tee -a "$REPORT"
-
-    section "Open ports"
+    section "Open Ports"
     ss -tuln | tee -a "$REPORT"
-
-    section "IP forwarding status"
+    section "IP Forwarding"
     sysctl net.ipv4.ip_forward | tee -a "$REPORT"
 }
 
-# 5. IP and Network Configuration Checks
+# 5. Public vs Private IP
 ip_audit() {
     print_title "5. PUBLIC vs PRIVATE IP CHECK"
-
-    section "IP address summary"
+    section "Local IPs"
     ip -4 a | tee -a "$REPORT"
-
-    section "Public IP check"
+    section "Public IP"
     curl -s ifconfig.me | tee -a "$REPORT"
-
-    # Check if any sensitive service is exposed on public IP
-    section "Sensitive service exposure"
+    section "SSH Exposure"
     ss -tulpn | grep ':22' | tee -a "$REPORT"
 }
 
-# 6. Security Updates and Patching
+# 6. Security Updates
 security_updates() {
-    print_title "6. SECURITY UPDATES AND PATCHING"
-
-    section "Available updates"
+    print_title "6. SECURITY UPDATES"
     apt_update
-
-    section "Security updates"
-    apt-get upgrade -q -y --only-upgrade | tee -a "$REPORT"
-
-    section "Running unattended upgrade"
-    apt-get install -y unattended-upgrades > /dev/null
+    section "Running unattended-upgrade"
+    install_package unattended-upgrades
     unattended-upgrade -d --dry-run | tee -a "$REPORT"
 }
 
 # 7. Log Monitoring
 log_monitoring() {
     print_title "7. LOG MONITORING"
-
-    section "SSH login attempts from auth.log"
+    section "Last SSH login attempts"
     grep -E "Failed|Accepted" /var/log/auth.log | tail -n 50 | tee -a "$REPORT"
 }
 
-# 8. Server Hardening Steps
+# 8. Server Hardening
 hardening_steps() {
     print_title "8. SERVER HARDENING"
-
-    section "SSH hardening"
-    sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+    section "SSH Hardening"
+    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
     systemctl restart sshd
-    log_and_print "→ SSH hardened: root login & password auth disabled"
+    log_and_print "→ SSH hardened"
 
     section "Disable IPv6"
     echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
     echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
     sysctl -p | tee -a "$REPORT"
 
-    section "Configure GRUB password"
+    section "GRUB Password"
+    GRUB_USER="root"
     GRUB_PASS="Strong@$(date +%s)"
     hash=$(echo -e "$GRUB_PASS\n$GRUB_PASS" | grub-mkpasswd-pbkdf2 | awk '/grub.pbkdf2/ {print $NF}')
     echo "password_pbkdf2 $GRUB_USER $hash" > /etc/grub.d/01_password
@@ -181,35 +138,43 @@ hardening_steps() {
     update-grub
     log_and_print "→ GRUB password set. Password: $GRUB_PASS"
 
-    section "Firewall rules"
+    section "Firewall Rules"
     ufw default deny incoming
     ufw default allow outgoing
     ufw allow 22
-    ufw enable
+    ufw --force enable
 
-    section "Enable automatic updates"
-    apt install -y unattended-upgrades > /dev/null
-
-    # Directly modify the configuration file for automatic updates
-    echo "APT::Periodic::Update-Package-Lists \"1\";" > /etc/apt/apt.conf.d/10periodic
-    echo "APT::Periodic::Unattended-Upgrade \"1\";" >> /etc/apt/apt.conf.d/10periodic
-    echo "APT::Periodic::AutocleanInterval \"7\";" >> /etc/apt/apt.conf.d/10periodic
-
-    # Set automatic updates for security upgrades
-    echo "Unattended-Upgrade::Automatic-Reboot 'true';" > /etc/apt/apt.conf.d/20auto-upgrades
-    echo "Unattended-Upgrade::Allowed-Origins::${distro_id} ${distro_codename}-security;" >> /etc/apt/apt.conf.d/20auto-upgrades
-
-    # Manually trigger unattended-upgrades without reconfigure (bypassing the warning)
-    unattended-upgrade -d > /dev/null
-
-    log_and_print "→ Automatic security updates enabled"
+    section "Automatic Security Updates"
+    echo 'APT::Periodic::Update-Package-Lists "1";' > /etc/apt/apt.conf.d/10periodic
+    echo 'APT::Periodic::Unattended-Upgrade "1";' >> /etc/apt/apt.conf.d/10periodic
+    echo 'APT::Periodic::AutocleanInterval "7";' >> /etc/apt/apt.conf.d/10periodic
 }
 
-# Main function to execute all sections
+# 9. Custom Checks
+custom_checks() {
+    print_title "9. CUSTOM SECURITY CHECKS"
+    if [[ ! -f "$CUSTOM_CONF" ]]; then
+        log_and_print "No custom_checks.conf found."
+        return
+    fi
+
+    while IFS=: read -r desc cmd; do
+        [[ -z "$desc" || -z "$cmd" ]] && continue
+        section "$desc"
+        bash -c "$cmd" 2>/dev/null | tee -a "$REPORT"
+    done < "$CUSTOM_CONF"
+}
+
+send_email() {
+    install_package mailutils
+    echo "Security Audit Report attached." | mail -s "Linux Security Audit Report" -a "$REPORT" "$EMAIL"
+}
+
 main() {
     clear
-    echo -e "\n\033[1;35m=== Starting Linux Security Audit ===\033[0m"
-
+    echo -e "\n=== Starting Security Audit ==="
+    install_package curl
+    install_package ufw
     user_audit
     file_perm_audit
     service_audit
@@ -218,8 +183,9 @@ main() {
     security_updates
     log_monitoring
     hardening_steps
-
-    echo -e "\n\033[1;32m=== Audit Completed. Report saved to $REPORT ===\033[0m"
+    custom_checks
+    send_email
+    echo -e "\n=== Audit Complete. Report: $REPORT ==="
 }
 
 main
