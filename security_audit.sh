@@ -1,224 +1,193 @@
 #!/bin/bash
 
-# Define the report file
-REPORT_FILE="security_audit_report.txt"
-> "$REPORT_FILE" # Clear the previous report
+# Set the report file
+REPORT_FILE="./security_audit_report.txt"
 
-# Function to write headers to the report
-write_header() {
-    echo "Security Audit and Hardening Report - $(date)" | tee -a "$REPORT_FILE"
-    echo "===================================" | tee -a "$REPORT_FILE"
-}
+# Create or clear the report file
+echo "Security Audit and Hardening Report" > "$REPORT_FILE"
+echo "===============================" >> "$REPORT_FILE"
+echo "Date: $(date)" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
 
-# Section 1: User and Group Audits
-user_group_audits() {
-    echo "===== User and Group Audits =====" | tee -a "$REPORT_FILE"
+# Function for User and Group Audits
+user_and_group_audit() {
+    echo "[+] Performing user and group audit..." | tee -a "$REPORT_FILE"
 
     # List all users and groups
-    echo "[+] Users and Groups:" | tee -a "$REPORT_FILE"
-    getent passwd | tee -a "$REPORT_FILE"
-    getent group | tee -a "$REPORT_FILE"
+    echo "List of users and groups on the system:" >> "$REPORT_FILE"
+    cat /etc/passwd >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Check for users with UID 0 (root privileges) and non-standard users
-    echo "[+] Checking for non-standard users with UID 0:" | tee -a "$REPORT_FILE"
-    awk -F: '($3 == "0") { print $1 }' /etc/passwd | tee -a "$REPORT_FILE"
+    # Check for users with UID 0 (root privileges)
+    echo "Users with UID 0 (root privileges):" >> "$REPORT_FILE"
+    awk -F: '($3 == 0) {print $1}' /etc/passwd >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Identify and report users with weak passwords
-    echo "[+] Identifying users with weak passwords:" | tee -a "$REPORT_FILE"
-    if ! command -v cracklib-check &>/dev/null; then
-        echo "[!] cracklib-check not found, please install it first." | tee -a "$REPORT_FILE"
-    fi
-    awk -F: '{ print $1 }' /etc/shadow | while read user; do
-        password=$(grep "^$user:" /etc/shadow | cut -d: -f2)
-        echo "$password" | cracklib-check | tee -a "$REPORT_FILE"
-    done
-    echo "" | tee -a "$REPORT_FILE"
+    # Check for users without passwords or with weak passwords
+    echo "Users without passwords or with weak passwords:" >> "$REPORT_FILE"
+    awk -F: '($2 == "") {print $1}' /etc/passwd >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 }
 
-# Section 2: File and Directory Permissions
-file_permissions() {
-    echo "===== File and Directory Permissions =====" | tee -a "$REPORT_FILE"
+# Function for File and Directory Permissions
+file_and_directory_permissions() {
+    echo "[+] Checking file and directory permissions..." | tee -a "$REPORT_FILE"
 
-    # Scan for world-writable files
-    echo "[+] World-writable files:" | tee -a "$REPORT_FILE"
-    find / -type f -perm -002 -exec ls -l {} \; 2>/dev/null | tee -a "$REPORT_FILE"
+    # Scan for files and directories with world-writable permissions
+    echo "Files and directories with world-writable permissions:" >> "$REPORT_FILE"
+    find / -xdev -type f -perm -0002 -exec ls -l {} \; >> "$REPORT_FILE"
+    find / -xdev -type d -perm -0002 -exec ls -ld {} \; >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Check for .ssh directories and secure permissions
-    echo "[+] Checking .ssh directories:" | tee -a "$REPORT_FILE"
-    find / -type d -name '.ssh' -exec ls -ld {} \; 2>/dev/null | tee -a "$REPORT_FILE"
+    # Check for the presence of .ssh directories with secure permissions
+    echo "Checking .ssh directories for proper permissions:" >> "$REPORT_FILE"
+    find / -name ".ssh" -exec ls -ld {} \; >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Report SUID/SGID bits set
-    echo "[+] SUID/SGID files:" | tee -a "$REPORT_FILE"
-    find / -type f \( -perm -4000 -o -perm -2000 \) -exec ls -l {} \; 2>/dev/null | tee -a "$REPORT_FILE"
-    echo "" | tee -a "$REPORT_FILE"
+    # Report any files with SUID or SGID bits set
+    echo "Files with SUID or SGID bits set:" >> "$REPORT_FILE"
+    find / -xdev \( -perm -4000 -o -perm -2000 \) -exec ls -l {} \; >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 }
 
-# Section 3: Service Audits
-service_audits() {
-    echo "===== Service Audits =====" | tee -a "$REPORT_FILE"
+# Function for Service Audits
+service_audit() {
+    echo "[+] Performing service audit..." | tee -a "$REPORT_FILE"
 
-    # List running services
-    echo "[+] Running Services:" | tee -a "$REPORT_FILE"
-    systemctl list-units --type=service --state=running | tee -a "$REPORT_FILE"
+    # List all running services
+    echo "List of running services:" >> "$REPORT_FILE"
+    service --status-all >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Check for unauthorized services
-    echo "[+] Checking for unauthorized services:" | tee -a "$REPORT_FILE"
-    systemctl list-units --type=service --state=inactive | tee -a "$REPORT_FILE"
+    # Check for critical services (e.g., sshd, iptables)
+    echo "Ensuring critical services are running (e.g., sshd, iptables)..." >> "$REPORT_FILE"
+    systemctl is-active sshd >> "$REPORT_FILE"
+    systemctl is-active iptables >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Ensure critical services are running
-    echo "[+] Checking critical services:" | tee -a "$REPORT_FILE"
-    for service in sshd iptables; do
-        systemctl is-active --quiet $service && echo "$service is running." | tee -a "$REPORT_FILE" || echo "$service is not running." | tee -a "$REPORT_FILE"
-    done
-    echo "" | tee -a "$REPORT_FILE"
+    # Check for services listening on non-standard ports
+    echo "Services listening on non-standard ports:" >> "$REPORT_FILE"
+    netstat -tulnp | grep -v ":22" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 }
 
-# Section 4: Firewall and Network Security
-firewall_network_security() {
-    echo "===== Firewall and Network Security =====" | tee -a "$REPORT_FILE"
+# Function for Firewall and Network Security
+firewall_and_network_security() {
+    echo "[+] Checking firewall and network security..." | tee -a "$REPORT_FILE"
 
-    # Verify if firewall is active
-    echo "[+] Checking firewall status:" | tee -a "$REPORT_FILE"
-    if systemctl is-active --quiet ufw; then
-        echo "ufw is active" | tee -a "$REPORT_FILE"
-    else
-        echo "ufw is inactive" | tee -a "$REPORT_FILE"
-    fi
+    # Check if a firewall is active
+    echo "Checking firewall status..." >> "$REPORT_FILE"
+    ufw status verbose >> "$REPORT_FILE"
+    iptables -L >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Report open ports and services
-    echo "[+] Checking open ports and services:" | tee -a "$REPORT_FILE"
-    netstat -tuln | tee -a "$REPORT_FILE"
+    # Report any open ports and their associated services
+    echo "Open ports and their associated services:" >> "$REPORT_FILE"
+    netstat -tuln >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
     # Check for IP forwarding
-    echo "[+] Checking IP forwarding:" | tee -a "$REPORT_FILE"
-    sysctl net.ipv4.ip_forward | tee -a "$REPORT_FILE"
-    echo "" | tee -a "$REPORT_FILE"
+    echo "Checking for IP forwarding configuration..." >> "$REPORT_FILE"
+    sysctl net.ipv4.ip_forward >> "$REPORT_FILE"
+    sysctl net.ipv6.conf.all.forwarding >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 }
 
-# Section 5: IP and Network Configuration Checks
-ip_network_config_checks() {
-    echo "===== IP and Network Configuration Checks =====" | tee -a "$REPORT_FILE"
+# Function for IP and Network Configuration Checks
+ip_and_network_config_check() {
+    echo "[+] Performing IP and Network Configuration Checks..." | tee -a "$REPORT_FILE"
 
     # Public vs Private IP Checks
-    echo "[+] Identifying public and private IPs:" | tee -a "$REPORT_FILE"
-    ip addr show | tee -a "$REPORT_FILE"
+    echo "Identifying public vs private IP addresses..." >> "$REPORT_FILE"
+    ip addr show >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Ensure no sensitive services are exposed on public IP
-    echo "[+] Checking for exposed services on public IPs:" | tee -a "$REPORT_FILE"
-    if [ "$(hostname -I)" != "" ]; then
-        for ip in $(hostname -I); do
-            if [[ "$ip" == 10.* || "$ip" == 172.* || "$ip" == 192.* ]]; then
-                echo "$ip is a private IP" | tee -a "$REPORT_FILE"
-            else
-                echo "$ip is a public IP" | tee -a "$REPORT_FILE"
-                # Check if SSH is exposed
-                nc -zv -w3 "$ip" 22 2>&1 | tee -a "$REPORT_FILE"
-            fi
-        done
-    fi
-    echo "" | tee -a "$REPORT_FILE"
+    # Check sensitive services exposure on public IPs (SSH)
+    echo "Checking SSH exposure on public IPs..." >> "$REPORT_FILE"
+    netstat -tuln | grep :22 >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 }
 
-# Section 6: Security Updates and Patching
+# Function for Security Updates and Patching
 security_updates() {
-    echo "===== Security Updates and Patching =====" | tee -a "$REPORT_FILE"
+    echo "[+] Checking for security updates..." | tee -a "$REPORT_FILE"
 
-    # Check for available updates
-    echo "[+] Checking for available updates:" | tee -a "$REPORT_FILE"
-    apt update && apt list --upgradable | tee -a "$REPORT_FILE"
+    # Check for available security updates
+    echo "Checking for available security updates..." >> "$REPORT_FILE"
+    apt list --upgradable >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 
-    # Ensure automatic updates are configured
-    echo "[+] Checking automatic updates configuration:" | tee -a "$REPORT_FILE"
-    if systemctl is-active --quiet unattended-upgrades; then
-        echo "Unattended upgrades is active." | tee -a "$REPORT_FILE"
-    else
-        echo "Unattended upgrades is inactive." | tee -a "$REPORT_FILE"
-    fi
-    echo "" | tee -a "$REPORT_FILE"
-}
-
-# Section 7: Log Monitoring
-log_monitoring() {
-    echo "===== Log Monitoring =====" | tee -a "$REPORT_FILE"
-
-    # Check for suspicious log entries
-    echo "[+] Checking SSH login attempts:" | tee -a "$REPORT_FILE"
-    grep "Failed password" /var/log/auth.log | tee -a "$REPORT_FILE"
-
-    # Report any suspicious entries
-    echo "[+] Checking for unusual log entries:" | tee -a "$REPORT_FILE"
-    grep "error" /var/log/syslog | tee -a "$REPORT_FILE"
-    echo "" | tee -a "$REPORT_FILE"
-}
-
-# Section 8: Server Hardening Steps
-server_hardening() {
-    echo "===== Server Hardening Steps =====" | tee -a "$REPORT_FILE"
-
-    # SSH Configuration: Disable password-based login
-    echo "[+] SSH Configuration - Disabling Password Authentication" | tee -a "$REPORT_FILE"
-    sed -i '/^PasswordAuthentication/ s/yes/no/' /etc/ssh/sshd_config
-    sed -i '/^PermitRootLogin/ s/yes/no/' /etc/ssh/sshd_config
-    systemctl restart sshd
-
-    # GRUB Password Setup
-    set_grub_password
-
-    # Disable IPv6 (if not required)
-    echo "[+] Disabling IPv6 (if not required):" | tee -a "$REPORT_FILE"
-    sysctl net.ipv6.conf.all.disable_ipv6=1
-    sysctl net.ipv6.conf.default.disable_ipv6=1
-    echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
-    echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-
-    # Configure firewall
-    echo "[+] Configuring Firewall Rules (iptables/ufw)" | tee -a "$REPORT_FILE"
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw enable
-
-    # Configure automatic updates
-    echo "[+] Enabling Automatic Security Updates" | tee -a "$REPORT_FILE"
-    apt install unattended-upgrades
+    # Ensure automatic updates are enabled
+    echo "Ensuring automatic updates are enabled..." >> "$REPORT_FILE"
     dpkg-reconfigure --priority=low unattended-upgrades
-
-    echo "" | tee -a "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 }
 
-# Section 9: Custom Security Checks
-custom_security_checks() {
-    echo "===== Custom Security Checks =====" | tee -a "$REPORT_FILE"
-    # Custom checks based on your organization's requirements can be added here
-    echo "[+] Custom checks can be added here." | tee -a "$REPORT_FILE"
-    echo "" | tee -a "$REPORT_FILE"
+# Function for Log Monitoring
+log_monitoring() {
+    echo "[+] Performing log monitoring..." | tee -a "$REPORT_FILE"
+
+    # Check for suspicious login attempts
+    echo "Checking for suspicious login attempts..." >> "$REPORT_FILE"
+    grep "Failed password" /var/log/auth.log >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 }
 
-# Section 10: Reporting and Email Alerts
-send_email_report() {
-    echo "===== Sending Email Report =====" | tee -a "$REPORT_FILE"
+# Function for SSH Configuration (Hardening)
+ssh_configuration() {
+    echo "[+] Hardening SSH configuration..." | tee -a "$REPORT_FILE"
 
-    # Ask for email address
-    echo "Enter the email address to send the report to:"
-    read -r email_address
+    # Disable password-based login for root
+    echo "Disabling root password login for SSH..." >> "$REPORT_FILE"
+    sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
 
-    # Use mail command to send the report
-    mail -s "Security Audit Report" "$email_address" < "$REPORT_FILE"
+    # Ensure key-based authentication is enabled
+    echo "Ensuring key-based authentication for SSH..." >> "$REPORT_FILE"
+    sed -i 's/^#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
-    echo "[+] Report sent to $email_address" | tee -a "$REPORT_FILE"
-    echo "" | tee -a "$REPORT_FILE"
+    # Restart SSH service to apply changes
+    systemctl restart sshd
+    echo "[+] SSH configuration hardened successfully." | tee -a "$REPORT_FILE"
 }
 
-# Main script execution
-write_header
-user_group_audits
-file_permissions
-service_audits
-firewall_network_security
-ip_network_config_checks
+# Function for GRUB Password Setup
+set_grub_password() {
+    echo "[+] Setting up GRUB password..." | tee -a "$REPORT_FILE"
+
+    # Prompt user for a password for GRUB
+    echo "Enter the password for GRUB (this will be hashed and set):"
+    read -s grub_password
+
+    # Generate the hashed password for GRUB
+    grub_password_hash=$(grub-mkpasswd-pbkdf2 <<< "$grub_password" | grep -oP "(?<=password_pbkdf2 ).*" | tee -a "$REPORT_FILE")
+
+    # Check if the GRUB password hash is generated successfully
+    if [ -z "$grub_password_hash" ]; then
+        echo "[!] Failed to generate the GRUB password hash." | tee -a "$REPORT_FILE"
+        exit 1
+    fi
+
+    # Edit GRUB configuration to add password
+    echo "[+] Configuring GRUB to use the password" | tee -a "$REPORT_FILE"
+    echo "set superusers="root"" >> /etc/grub.d/40_custom
+    echo "password_pbkdf2 root $grub_password_hash" >> /etc/grub.d/40_custom
+
+    # Update GRUB to apply changes
+    update-grub
+
+    echo "[+] GRUB password set successfully." | tee -a "$REPORT_FILE"
+}
+
+# Call the functions
+user_and_group_audit
+file_and_directory_permissions
+service_audit
+firewall_and_network_security
+ip_and_network_config_check
 security_updates
 log_monitoring
-server_hardening
-custom_security_checks
-send_email_report
+ssh_configuration
+set_grub_password
 
-echo "Security audit and hardening completed. Report is saved to $REPORT_FILE."
+# Notify user
+echo "[+] Security audit and hardening completed. Report saved to $REPORT_FILE"
