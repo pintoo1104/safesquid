@@ -115,12 +115,12 @@ security_updates() {
     print_title "6. SECURITY UPDATES AND PATCHING"
 
     section "Available updates"
-    sudo apt-get update -qq > /dev/null
-    sudo apt-get list --upgradable 2>/dev/null | grep security | tee -a "$REPORT"
+    apt update -qq > /dev/null
+    apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT"
 
     section "Running unattended upgrade"
-    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y unattended-upgrades > /dev/null
-    sudo unattended-upgrade -d --dry-run | tee -a "$REPORT"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades > /dev/null
+    unattended-upgrade -d --dry-run | tee -a "$REPORT"
 }
 
 # 7. Log Monitoring
@@ -147,15 +147,13 @@ hardening_steps() {
     sysctl -p | tee -a "$REPORT"
 
     section "Configure GRUB password (secured)"
-    grub_pass_file="/etc/grub.d/01_password"
-    GRUB_USER="admin"
-    GRUB_PASS="Strong@$(date +%s)"
+    read -sp "Enter GRUB password: " GRUB_PASS
     hash=$(echo -e "$GRUB_PASS\n$GRUB_PASS" | grub-mkpasswd-pbkdf2 | awk '/grub.pbkdf2/ {print $NF}')
-    echo "set superuser=\"$GRUB_USER\"" > "$grub_pass_file"
-    echo "password_pbkdf2 $GRUB_USER $hash" >> "$grub_pass_file"
-    chmod 600 "$grub_pass_file"
+    echo "set superuser=\"root\"" > /etc/grub.d/01_password
+    echo "password_pbkdf2 root $hash" >> /etc/grub.d/01_password
+    chmod 600 /etc/grub.d/01_password
     update-grub
-    log_and_print "→ GRUB password set for user '$GRUB_USER'. Password: $GRUB_PASS"
+    log_and_print "→ GRUB password set for user 'root'. Password has been securely stored."
 
     section "Firewall rules"
     ufw default deny incoming
@@ -164,8 +162,8 @@ hardening_steps() {
     ufw enable
 
     section "Enable automatic updates"
-    sudo apt-get install -y unattended-upgrades > /dev/null
-    sudo dpkg-reconfigure --frontend=noninteractive unattended-upgrades
+    apt install -y unattended-upgrades > /dev/null
+    dpkg-reconfigure --frontend=noninteractive unattended-upgrades
     log_and_print "→ Automatic security updates enabled"
 }
 
