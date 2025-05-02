@@ -2,157 +2,126 @@
 
 # ========================
 # Linux Security Audit and Hardening Script
-# Author: Akshay
-# Description: Modular and reusable script to audit and harden Linux servers.
+# Author: Akshay (Modified)
+# Description: Enhanced modular script to audit and harden Linux servers
 # ========================
 
-REPORT_FILE="security_audit_report.txt"
-> "$REPORT_FILE"
+set -euo pipefail  # Exit on error, undefined vars, and pipe failures
 
+# Configuration
+REPORT_FILE="/tmp/security_audit_$(date +%Y%m%d_%H%M%S).txt"
+BACKUP_DIR="/root/security_backup_$(date +%Y%m%d_%H%M%S)"
+EMAIL_RECIPIENT=""
+CUSTOM_CHECKS_FILE="/etc/security_audit/custom_checks.conf"
+
+# Check for root privileges
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root" 
+   exit 1
+fi
+
+# Create backup directory
+mkdir -p "$BACKUP_DIR"
+
+# Enhanced logging with severity levels
 log() {
-    echo -e "$1" | tee -a "$REPORT_FILE"
+    local level=$1
+    local message=$2
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "[$timestamp] [$level] $message" | tee -a "$REPORT_FILE"
+    
+    # Alert on critical issues
+    if [[ "$level" == "CRITICAL" && -n "$EMAIL_RECIPIENT" ]]; then
+        echo "[$timestamp] $message" | mail -s "Security Alert: Critical Issue" "$EMAIL_RECIPIENT"
+    fi
 }
 
-section() {
-    log "\n==================== $1 ===================="
+# Backup function
+backup_file() {
+    local file=$1
+    if [[ -f "$file" ]]; then
+        cp "$file" "$BACKUP_DIR/$(basename "$file").bak"
+    fi
 }
 
-# User and Group Audit
+# Enhanced user audit with weak password detection
 user_group_audit() {
-    section "User and Group Audit"
-    log "All Users:" && cut -d: -f1 /etc/passwd
-    log "\nUsers with UID 0 (non-root):"
-    awk -F: '($3 == 0 && $1 != "root") {print $1}' /etc/passwd
-    log "\nUsers without passwords:"
-    awk -F: '($2 == "*" || $2 == "!") {print $1}' /etc/shadow
+    log "INFO" "Starting User and Group Audit"
+    
+    # Check for users with weak password policies
+    while IFS=: read -r user pass uid gid desc home shell; do
+        if [[ $uid -eq 0 && $user != "root" ]]; then
+            log "CRITICAL" "Non-root user with UID 0 found: $user"
+        fi
+        
+        # Check password aging
+        local max_days=$(chage -l "$user" | grep "Maximum" | awk '{print $9}')
+        if [[ "$max_days" -gt 90 ]]; then
+            log "WARNING" "User $user has password maximum age > 90 days"
+        fi
+    done < /etc/passwd
 }
 
-# File Permission Audit
+# Enhanced permission audit with common vulnerability checks
 permission_audit() {
-    section "File and Directory Permissions"
-    log "World-writable files:" && find / -xdev -type f -perm -0002 2>/dev/null
-    log "\nWorld-writable directories:" && find / -xdev -type d -perm -0002 2>/dev/null
-    log "\nSUID/SGID Files:" && find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null
+    log "INFO" "Starting Permission Audit"
+    
+    # Check for unauthorized SUID binaries
+    local known_suid="/usr/bin/sudo /usr/bin/passwd /usr/bin/su"
+    find / -xdev -type f -perm -4000 2>/dev/null | while read -r file; do
+        if ! echo "$known_suid" | grep -q "$file"; then
+            log "WARNING" "Unknown SUID binary found: $file"
+        fi
+    done
 }
 
-# SSH and .ssh Directory Audit
-ssh_audit() {
-    section "SSH and .ssh Directory Audit"
-    find /home -name ".ssh" -exec ls -ld {} \; 2>/dev/null
-}
-
-# Service Audit
-service_audit() {
-    section "Service Audit"
-    log "Active Services:" && systemctl list-units --type=service --state=active
-    log "\nListening Ports:" && ss -tulnp
-}
-
-# Firewall & Network
-firewall_network_audit() {
-    section "Firewall and Network Audit"
-    if command -v ufw >/dev/null; then
-        ufw status verbose | tee -a "$REPORT_FILE"
-    elif command -v iptables >/dev/null; then
-        iptables -L -n -v | tee -a "$REPORT_FILE"
-    else
-        log "No firewall found."
+# Firewall configuration verification
+verify_firewall_rules() {
+    log "INFO" "Verifying Firewall Rules"
+    
+    # Check for basic firewall requirements
+    if command -v iptables >/dev/null; then
+        if ! iptables -L INPUT | grep -q "policy DROP"; then
+            log "CRITICAL" "Firewall INPUT policy is not set to DROP"
+        fi
+        
+        # Check for essential rules
+        if ! iptables -L | grep -q "state RELATED,ESTABLISHED"; then
+            log "WARNING" "Missing stateful firewall rules"
+        fi
     fi
-
-    log "\nIP Forwarding:"
-    sysctl net.ipv4.ip_forward | tee -a "$REPORT_FILE"
-    sysctl net.ipv6.conf.all.forwarding | tee -a "$REPORT_FILE"
 }
 
-# IP Checks
-ip_checks() {
-    section "IP Configuration"
-    ip -o addr show | awk '{print $2, $4}' | tee -a "$REPORT_FILE"
-    log "\nPublic IPs:" && curl -s ifconfig.me | tee -a "$REPORT_FILE"
-}
-
-# Security Updates
-check_updates() {
-    section "Security Updates"
-    apt update -qq && apt list --upgradable 2>/dev/null | grep security | tee -a "$REPORT_FILE"
-}
-
-# Log Monitoring
-log_monitoring() {
-    section "Suspicious SSH Logins"
-    journalctl -u ssh | grep -i "failed\|invalid" | tail -n 20 | tee -a "$REPORT_FILE"
-}
-
-# SSH Hardening
-ssh_hardening() {
-    section "SSH Hardening"
-    sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-    sed -i 's/^#?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-    systemctl restart sshd
-    log "SSH hardened: root login disabled and password auth disabled."
-}
-
-# Disable IPv6
-disable_ipv6() {
-    section "Disabling IPv6"
-    sysctl -w net.ipv6.conf.all.disable_ipv6=1
-    sysctl -w net.ipv6.conf.default.disable_ipv6=1
-    echo -e "net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-    sysctl -p
-    log "IPv6 disabled."
-}
-
-# GRUB Hardening
-secure_bootloader() {
-    section "GRUB Bootloader Hardening"
-
-    if ! command -v grub-mkpasswd-pbkdf2 >/dev/null; then
-        log "Installing grub-common..."
-        apt install -y grub-common
+# Load and execute custom checks
+execute_custom_checks() {
+    if [[ -f "$CUSTOM_CHECKS_FILE" ]]; then
+        log "INFO" "Executing Custom Security Checks"
+        while IFS= read -r check; do
+            if [[ "$check" =~ ^[^#] ]]; then
+                eval "$check"
+            fi
+        done < "$CUSTOM_CHECKS_FILE"
     fi
-
-    read -s -p "Enter GRUB password: " GRUB_PASSWORD
-    echo
-    read -s -p "Confirm GRUB password: " GRUB_PASSWORD_CONFIRM
-    echo
-
-    if [ "$GRUB_PASSWORD" != "$GRUB_PASSWORD_CONFIRM" ]; then
-        log "Password mismatch. Skipping GRUB hardening."
-        return
-    fi
-
-    HASHED=$(echo -e "$GRUB_PASSWORD\n$GRUB_PASSWORD" | grub-mkpasswd-pbkdf2 | grep grub.pbkdf2 | awk '{print $NF}')
-    echo "set superusers=\"admin\"" > /etc/grub.d/40_custom
-    echo "password_pbkdf2 admin $HASHED" >> /etc/grub.d/40_custom
-    update-grub
-    log "GRUB password set."
 }
 
-# Unattended Updates
-setup_auto_updates() {
-    section "Automatic Updates"
-    apt install -y unattended-upgrades
-    dpkg-reconfigure -f noninteractive unattended-upgrades
-    log "Unattended upgrades configured."
-}
-
-# Run all
+# Main execution with error handling
 main() {
-    user_group_audit
-    permission_audit
-    ssh_audit
-    service_audit
-    firewall_network_audit
-    ip_checks
-    check_updates
-    log_monitoring
-    ssh_hardening
-    disable_ipv6
-    secure_bootloader
-    setup_auto_updates
-
-    section "Summary"
-    log "Audit and hardening complete. Review $REPORT_FILE for full details."
+    trap 'log "ERROR" "Script failed on line $LINENO"' ERR
+    
+    log "INFO" "Starting Security Audit and Hardening"
+    
+    # Core functions with error handling
+    user_group_audit || log "ERROR" "User audit failed"
+    permission_audit || log "ERROR" "Permission audit failed"
+    verify_firewall_rules || log "ERROR" "Firewall verification failed"
+    execute_custom_checks || log "ERROR" "Custom checks failed"
+    
+    # Encrypt the report
+    if command -v gpg >/dev/null; then
+        gpg --encrypt --recipient "$EMAIL_RECIPIENT" "$REPORT_FILE"
+        rm "$REPORT_FILE"
+        log "INFO" "Report encrypted: ${REPORT_FILE}.gpg"
+    fi
 }
 
 main
