@@ -113,8 +113,27 @@ echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.conf
 echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf
 sysctl -p | tee -a "$REPORT_FILE"
 
-echo -e "\nSetting GRUB password (manual step recommended)." | tee -a "$REPORT_FILE"
-warning "You must manually configure /etc/grub.d/40_custom with a GRUB password."
+# ===== GRUB PASSWORD CONFIGURATION =====
+header "Setting GRUB Password"
+read -sp "Enter the GRUB password: " grub_pw
+echo -e "\nRe-enter the GRUB password: "
+read -sp "Re-enter the GRUB password: " grub_pw_confirm
+
+if [[ "$grub_pw" == "$grub_pw_confirm" ]]; then
+    echo "Setting the GRUB password..." | tee -a "$REPORT_FILE"
+
+    # Encrypt the password using grub-mkpasswd-pbkdf2
+    grub_pw_hash=$(grub-mkpasswd-pbkdf2 <<< "$grub_pw" | grep -oP '(?<=password_pbkdf2 ).*')
+
+    # Add the GRUB password entry to 40_custom
+    echo -e "set superusers=\"root\"\npassword_pbkdf2 root $grub_pw_hash" >> /etc/grub.d/40_custom
+
+    # Update GRUB configuration
+    update-grub
+    status "GRUB password set successfully."
+else
+    error "Passwords do not match. GRUB password was not set."
+fi
 
 # ===== SECTION 9: CUSTOM SECURITY CHECKS =====
 header "Section 9: Custom Security Checks"
