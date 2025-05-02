@@ -1,160 +1,138 @@
 #!/bin/bash
 
-# Define the report file path
-REPORT_FILE="./security_audit_report.txt"
+# ===== CONFIGURATION =====
+REPORT_FILE="$(pwd)/security_audit_report_$(date +%F_%T).txt"
+CUSTOM_CHECKS_FILE="custom_checks.sh"
+CONFIG_FILE="config.cfg"
 
-# Function to log messages to both console and report file
-log_message() {
-    echo "$1" | tee -a "$REPORT_FILE"
+# ===== COLORS =====
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+BLUE="\033[1;34m"
+NC="\033[0m"
+
+function header() {
+    echo -e "\n${BLUE}========== $1 ==========${NC}" | tee -a "$REPORT_FILE"
 }
 
-# Function for User and Group Audits
-user_group_audit() {
-    log_message "[+] User and Group Audit started..."
-    # List all users and groups on the server
-    log_message "[*] List of users and groups:"
-    cut -d: -f1 /etc/passwd >> "$REPORT_FILE"
-    log_message "[*] Checking for root users with UID 0..."
-    grep 'x:0' /etc/passwd >> "$REPORT_FILE"
-    log_message "[*] Checking for weak passwords..."
-    # Install John the Ripper for weak password detection
-    if ! command -v john &>/dev/null; then
-        log_message "[*] Installing John the Ripper for password check..."
-        apt-get install -y john
-    fi
-    # Password strength check (you can customize this part)
-    john --list=passwords /etc/shadow >> "$REPORT_FILE"
-    log_message "[+] User and Group Audit completed."
+function status() {
+    echo -e "${GREEN}[OK]${NC} $1" | tee -a "$REPORT_FILE"
 }
 
-# Function for File and Directory Permissions
-file_permissions() {
-    log_message "[+] File and Directory Permissions Audit started..."
-    # Scan for world-writable files
-    log_message "[*] Checking for world-writable files and directories..."
-    find / -xdev -type f -perm -002 >> "$REPORT_FILE"
-    find / -xdev -type d -perm -002 >> "$REPORT_FILE"
-    log_message "[*] Checking for SUID and SGID files..."
-    find / -xdev \( -perm -4000 -o -perm -2000 \) >> "$REPORT_FILE"
-    log_message "[*] Checking .ssh directory permissions..."
-    find / -type d -name .ssh -exec ls -ld {} \; >> "$REPORT_FILE"
-    log_message "[+] File and Directory Permissions Audit completed."
+function warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1" | tee -a "$REPORT_FILE"
 }
 
-# Function for Service Audits
-service_audit() {
-    log_message "[+] Service Audit started..."
-    # List running services
-    log_message "[*] Running services:"
-    service --status-all >> "$REPORT_FILE"
-    log_message "[*] Checking for critical services like sshd and iptables..."
-    systemctl status sshd >> "$REPORT_FILE"
-    systemctl status iptables >> "$REPORT_FILE"
-    log_message "[*] Checking for unauthorized services..."
-    # Replace this with your list of essential services
-    critical_services=("sshd" "iptables")
-    for service in "${critical_services[@]}"; do
-        if ! systemctl is-active --quiet "$service"; then
-            log_message "[!] WARNING: $service is not running!" >> "$REPORT_FILE"
-        fi
-    done
-    log_message "[+] Service Audit completed."
+function error() {
+    echo -e "${RED}[ERROR]${NC} $1" | tee -a "$REPORT_FILE"
 }
 
-# Function for Firewall and Network Security
-firewall_network_security() {
-    log_message "[+] Firewall and Network Security Audit started..."
-    # Check for active firewall
-    ufw_status=$(ufw status verbose)
-    log_message "[*] Checking firewall status: $ufw_status"
-    echo "$ufw_status" >> "$REPORT_FILE"
-    log_message "[*] Checking for open ports and associated services..."
-    netstat -tuln >> "$REPORT_FILE"
-    log_message "[+] Firewall and Network Security Audit completed."
-}
+# ===== SECTION 1: USER AND GROUP AUDITS =====
+header "Section 1: User and Group Audits"
+echo "Users:" | tee -a "$REPORT_FILE"
+cut -d: -f1 /etc/passwd | tee -a "$REPORT_FILE"
+echo -e "\nGroups:" | tee -a "$REPORT_FILE"
+cut -d: -f1 /etc/group | tee -a "$REPORT_FILE"
 
-# Function for Security Updates and Patching
-security_updates() {
-    log_message "[+] Checking for security updates..."
-    # Check for available security updates
-    apt list --upgradable >> "$REPORT_FILE"
-    log_message "[+] Checking for automatic updates..."
+uid0_users=$(awk -F: '$3 == 0 {print $1}' /etc/passwd)
+echo -e "\nUsers with UID 0: $uid0_users" | tee -a "$REPORT_FILE"
 
-    # Ensure automatic updates are enabled without interaction
+weak_pass_tool="john"
+if ! command -v $weak_pass_tool &>/dev/null; then
+    echo "Installing $weak_pass_tool..." | tee -a "$REPORT_FILE"
+    apt-get update && apt-get install -y john
+else
+    status "$weak_pass_tool already installed."
+fi
+
+unshadow /etc/passwd /etc/shadow > /tmp/john_shadow_combined
+john /tmp/john_shadow_combined --show | tee -a "$REPORT_FILE"
+
+# ===== SECTION 2: FILE AND DIRECTORY PERMISSIONS =====
+header "Section 2: File and Directory Permissions"
+echo "World-writable files:" | tee -a "$REPORT_FILE"
+find / -xdev -type f -perm -0002 2>/dev/null | tee -a "$REPORT_FILE"
+echo -e "\nSSH directory permissions:" | tee -a "$REPORT_FILE"
+find /home -name .ssh -exec ls -ld {} + 2>/dev/null | tee -a "$REPORT_FILE"
+echo -e "\nFiles with SUID/SGID:" | tee -a "$REPORT_FILE"
+find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null | tee -a "$REPORT_FILE"
+
+# ===== SECTION 3: SERVICE AUDITS =====
+header "Section 3: Service Audits"
+echo "Running services:" | tee -a "$REPORT_FILE"
+systemctl list-units --type=service --state=running | tee -a "$REPORT_FILE"
+echo -e "\nEnabled services:" | tee -a "$REPORT_FILE"
+systemctl list-unit-files --type=service | grep enabled | tee -a "$REPORT_FILE"
+echo -e "\nListening ports:" | tee -a "$REPORT_FILE"
+ss -tuln | tee -a "$REPORT_FILE"
+
+# ===== SECTION 4: FIREWALL AND NETWORK SECURITY =====
+header "Section 4: Firewall and Network Security"
+echo "Firewall status (ufw):" | tee -a "$REPORT_FILE"
+ufw status verbose 2>/dev/null | tee -a "$REPORT_FILE"
+echo -e "\nOpen ports:" | tee -a "$REPORT_FILE"
+lsof -i -P -n | grep LISTEN | tee -a "$REPORT_FILE"
+echo -e "\nIP forwarding status:" | tee -a "$REPORT_FILE"
+cat /proc/sys/net/ipv4/ip_forward | tee -a "$REPORT_FILE"
+
+# ===== SECTION 5: IP AND NETWORK CONFIGURATION CHECKS =====
+header "Section 5: IP and Network Configuration"
+ip -4 addr show | grep inet | tee -a "$REPORT_FILE"
+ip -6 addr show | grep inet6 | tee -a "$REPORT_FILE"
+echo -e "\nHostname IPs:" | tee -a "$REPORT_FILE"
+hostname -I | tee -a "$REPORT_FILE"
+echo -e "\nChecking for public IP exposure..." | tee -a "$REPORT_FILE"
+if curl -s ifconfig.me | grep -qE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b'; then
+    warning "Public IP detected: $(curl -s ifconfig.me)"
+fi
+
+# ===== SECTION 6: SECURITY UPDATES AND PATCHING =====
+header "Section 6: Security Updates"
+apt update -qq && apt list --upgradable 2>/dev/null | tee -a "$REPORT_FILE"
+if ! dpkg -l | grep -q unattended-upgrades; then
+    echo "Installing unattended-upgrades..." | tee -a "$REPORT_FILE"
     apt-get install -y unattended-upgrades
+fi
 
-    # Configure automatic updates to avoid interactive prompts
-    dpkg-reconfigure --priority=low unattended-upgrades > /dev/null 2>&1
+# ===== SECTION 7: LOG MONITORING =====
+header "Section 7: Log Monitoring"
+echo "Recent suspicious SSH logins (last 50):" | tee -a "$REPORT_FILE"
+tail -n 50 /var/log/auth.log | grep sshd | tee -a "$REPORT_FILE"
 
-    # Ensure automatic updates are enabled in the configuration
-    log_message "[+] Enabling automatic updates..."
-    echo 'Unattended-Upgrade::Automatic-Reboot "true";' >> /etc/apt/apt.conf.d/50unattended-upgrades
-    echo 'APT::Periodic::Update-Package-Lists "1";' >> /etc/apt/apt.conf.d/10periodic
-    echo 'APT::Periodic::Unattended-Upgrade "1";' >> /etc/apt/apt.conf.d/10periodic
-    echo 'APT::Periodic::AutocleanInterval "7";' >> /etc/apt/apt.conf.d/10periodic
+# ===== SECTION 8: SSH, BOOTLOADER, IPV6, FIREWALL HARDENING =====
+header "Section 8: Server Hardening"
+echo -e "\nSSH Config Changes:" | tee -a "$REPORT_FILE"
+sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+systemctl restart sshd
+status "SSH hardening complete."
 
-    log_message "[+] Automatic updates configured successfully."
-}
+echo -e "\nDisabling IPv6:" | tee -a "$REPORT_FILE"
+echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.conf
+echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf
+sysctl -p | tee -a "$REPORT_FILE"
 
-# Function for IP and Network Configuration Checks
-network_config_check() {
-    log_message "[+] IP and Network Configuration Check started..."
-    # Identify public and private IP addresses
-    ip_addresses=$(hostname -I)
-    log_message "[*] IP addresses on this system: $ip_addresses"
-    for ip in $ip_addresses; do
-        if [[ "$ip" =~ ^10\. || "$ip" =~ ^172\.16\. || "$ip" =~ ^192\.168\. ]]; then
-            log_message "[*] Private IP: $ip"
-        else
-            log_message "[*] Public IP: $ip"
-        fi
-    done
-    log_message "[+] IP and Network Configuration Check completed."
-}
+echo -e "\nSetting GRUB password (manual step recommended)." | tee -a "$REPORT_FILE"
+warning "You must manually configure /etc/grub.d/40_custom with a GRUB password."
 
-# Function for SSH Configuration (Key-based Authentication)
-ssh_configuration() {
-    log_message "[+] SSH Configuration started..."
-    # Disable root login and password authentication
-    sed -i '/^PermitRootLogin/s/yes/no/' /etc/ssh/sshd_config
-    sed -i '/^PasswordAuthentication/s/yes/no/' /etc/ssh/sshd_config
-    systemctl restart sshd
-    log_message "[+] SSH configuration updated."
-}
+# ===== SECTION 9: CUSTOM SECURITY CHECKS =====
+header "Section 9: Custom Security Checks"
+if [[ -f "$CUSTOM_CHECKS_FILE" ]]; then
+    bash "$CUSTOM_CHECKS_FILE" | tee -a "$REPORT_FILE"
+else
+    warning "Custom checks file not found. Skipping."
+fi
 
-# Function to Set GRUB Password (Manual Configuration)
-set_grub_password() {
-    log_message "[+] WARNING: GRUB password must be set manually."
-    log_message "[*] Please configure a GRUB password manually to secure bootloader."
-    log_message "[*] You can follow these steps: https://www.digitalocean.com/community/tutorials/how-to-set-up-grub-passwords-on-ubuntu-18-04"
-}
+# ===== SECTION 10: REPORTING AND EMAIL =====
+header "Section 10: Reporting and Email"
+read -p "Enter email address to send report: " EMAIL_ADDR
+if ! command -v mail &>/dev/null; then
+    echo "Installing mailutils..." | tee -a "$REPORT_FILE"
+    apt-get install -y mailutils
+fi
 
-# Main Execution Flow
-main() {
-    log_message "[+] Security Audit Script Started..."
+mail -s "Security Audit Report" "$EMAIL_ADDR" < "$REPORT_FILE"
+status "Email sent to $EMAIL_ADDR"
 
-    # Call functions in the required order
-    user_group_audit
-    file_permissions
-    service_audit
-    firewall_network_security
-    security_updates
-    network_config_check
-    ssh_configuration
-    set_grub_password
-
-    log_message "[+] Security Audit Script Completed."
-
-    # Send the report via email
-    send_report_email
-}
-
-# Function to send report via email (if required)
-send_report_email() {
-    read -p "Enter the email address to send the report to: " email
-    mail -s "Security Audit Report" "$email" < "$REPORT_FILE"
-    log_message "[+] Report sent to $email."
-}
-
-# Start the script
-main
+header "Audit Completed. Report saved to: $REPORT_FILE"
