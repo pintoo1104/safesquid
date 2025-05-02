@@ -1,198 +1,138 @@
 #!/bin/bash
 
-# ===============================
-# Linux Security Audit & Hardening Script (Set 2)
-# ===============================
+# ===== CONFIGURATION =====
+REPORT_FILE="$(pwd)/security_audit_report_$(date +%F_%T).txt"
+CUSTOM_CHECKS_FILE="custom_checks.sh"
+CONFIG_FILE="config.cfg"
 
-# Output Report File
-REPORT_FILE="$(pwd)/linux_audit_report_$(date +%F_%T).txt"
+# ===== COLORS =====
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+BLUE="\033[1;34m"
+NC="\033[0m"
 
-# Colors for output
-RED="\e[31m"; GREEN="\e[32m"; YELLOW="\e[33m"; NC="\e[0m"
-
-# ===============================
-# Section 1: User and Group Audits
-# ===============================
-user_group_audit() {
-    echo "[SECTION 1: User and Group Audits]" >> "$REPORT_FILE"
-    echo "\n>> All Users:" >> "$REPORT_FILE"
-    cut -d: -f1 /etc/passwd >> "$REPORT_FILE"
-
-    echo "\n>> All Groups:" >> "$REPORT_FILE"
-    cut -d: -f1 /etc/group >> "$REPORT_FILE"
-
-    echo "\n>> Users with UID 0 (should be only root):" >> "$REPORT_FILE"
-    awk -F: '($3 == 0) { print $1 }' /etc/passwd >> "$REPORT_FILE"
-
-    echo "\n>> Users with no password or weak password (chkpasswd):" >> "$REPORT_FILE"
-    if ! command -v john &>/dev/null; then
-        echo "[*] Installing John the Ripper for weak password checks..." >> "$REPORT_FILE"
-        sudo apt update && sudo apt install -y john
-    fi
-    unshadow /etc/passwd /etc/shadow > /tmp/passwords.txt
-    john /tmp/passwords.txt --wordlist=/usr/share/wordlists/rockyou.txt --format=crypt >> "$REPORT_FILE"
+function header() {
+    echo -e "\n${BLUE}========== $1 ==========${NC}" | tee -a "$REPORT_FILE"
 }
 
-# ===============================
-# Section 2: File and Directory Permissions
-# ===============================
-file_permission_audit() {
-    echo "\n[SECTION 2: File and Directory Permissions]" >> "$REPORT_FILE"
-    echo "\n>> World-writable files and directories:" >> "$REPORT_FILE"
-    find / -xdev \( -type d -o -type f \) -perm -0002 -ls 2>/dev/null >> "$REPORT_FILE"
-
-    echo "\n>> .ssh directories and their permissions:" >> "$REPORT_FILE"
-    find /home /root -type d -name ".ssh" -exec ls -ld {} + 2>/dev/null >> "$REPORT_FILE"
-
-    echo "\n>> Files with SUID/SGID bits set:" >> "$REPORT_FILE"
-    find / -xdev \( -perm -4000 -o -perm -2000 \) -type f -exec ls -l {} + 2>/dev/null >> "$REPORT_FILE"
+function status() {
+    echo -e "${GREEN}[OK]${NC} $1" | tee -a "$REPORT_FILE"
 }
 
-# ===============================
-# Section 3: Service Audits
-# ===============================
-service_audit() {
-    echo "\n[SECTION 3: Service Audits]" >> "$REPORT_FILE"
-    echo "\n>> All running services:" >> "$REPORT_FILE"
-    systemctl list-units --type=service --state=running >> "$REPORT_FILE"
-
-    echo "\n>> Enabled services on boot:" >> "$REPORT_FILE"
-    systemctl list-unit-files | grep enabled >> "$REPORT_FILE"
-
-    echo "\n>> SSH and iptables status:" >> "$REPORT_FILE"
-    systemctl is-active sshd >> "$REPORT_FILE"
-    systemctl is-active iptables >> "$REPORT_FILE"
-
-    echo "\n>> Services listening on non-standard ports:" >> "$REPORT_FILE"
-    ss -tuln | grep -vE ':22|:80|:443' >> "$REPORT_FILE"
+function warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1" | tee -a "$REPORT_FILE"
 }
 
-# ===============================
-# Section 4: Firewall and Network Security
-# ===============================
-firewall_network_audit() {
-    echo "\n[SECTION 4: Firewall and Network Security]" >> "$REPORT_FILE"
-    echo "\n>> Firewall status (ufw or iptables):" >> "$REPORT_FILE"
-    if command -v ufw &>/dev/null; then
-        ufw status verbose >> "$REPORT_FILE"
-    elif command -v iptables &>/dev/null; then
-        iptables -L -n -v >> "$REPORT_FILE"
-    else
-        echo "No firewall tool found (ufw/iptables)" >> "$REPORT_FILE"
-    fi
-
-    echo "\n>> Open ports and services:" >> "$REPORT_FILE"
-    ss -tuln >> "$REPORT_FILE"
-
-    echo "\n>> IP forwarding status:" >> "$REPORT_FILE"
-    sysctl net.ipv4.ip_forward >> "$REPORT_FILE"
-    sysctl net.ipv6.conf.all.forwarding >> "$REPORT_FILE"
+function error() {
+    echo -e "${RED}[ERROR]${NC} $1" | tee -a "$REPORT_FILE"
 }
 
-# ===============================
-# Section 5: Public vs Private IP
-# ===============================
-ip_check() {
-    echo "\n[SECTION 5: Public vs Private IPs]" >> "$REPORT_FILE"
-    echo "\n>> IP addresses and classification:" >> "$REPORT_FILE"
-    for ip in $(hostname -I); do
-        if [[ "$ip" =~ ^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])|^192\.168 ]]; then
-            echo "$ip - Private" >> "$REPORT_FILE"
-        else
-            echo "$ip - Public" >> "$REPORT_FILE"
-        fi
-    done
+# ===== SECTION 1: USER AND GROUP AUDITS =====
+header "Section 1: User and Group Audits"
+echo "Users:" | tee -a "$REPORT_FILE"
+cut -d: -f1 /etc/passwd | tee -a "$REPORT_FILE"
+echo -e "\nGroups:" | tee -a "$REPORT_FILE"
+cut -d: -f1 /etc/group | tee -a "$REPORT_FILE"
 
-    echo "\n>> Services exposed on public IPs (if any):" >> "$REPORT_FILE"
-    ss -tunlp | grep $(curl -s ifconfig.me) >> "$REPORT_FILE" 2>/dev/null
-}
+uid0_users=$(awk -F: '$3 == 0 {print $1}' /etc/passwd)
+echo -e "\nUsers with UID 0: $uid0_users" | tee -a "$REPORT_FILE"
 
-# ===============================
-# Section 6: Security Updates and Patching
-# ===============================
-security_updates() {
-    echo "\n[SECTION 6: Security Updates and Patching]" >> "$REPORT_FILE"
-    echo "\n>> Available updates:" >> "$REPORT_FILE"
-    apt update -qq && apt list --upgradable 2>/dev/null >> "$REPORT_FILE"
+weak_pass_tool="john"
+if ! command -v $weak_pass_tool &>/dev/null; then
+    echo "Installing $weak_pass_tool..." | tee -a "$REPORT_FILE"
+    apt-get update && apt-get install -y john
+else
+    status "$weak_pass_tool already installed."
+fi
 
-    echo "\n>> Unattended Upgrades status:" >> "$REPORT_FILE"
-    systemctl is-enabled unattended-upgrades >> "$REPORT_FILE"
-}
+unshadow /etc/passwd /etc/shadow > /tmp/john_shadow_combined
+john /tmp/john_shadow_combined --show | tee -a "$REPORT_FILE"
 
-# ===============================
-# Section 7: Log Monitoring
-# ===============================
-log_monitoring() {
-    echo "\n[SECTION 7: Log Monitoring]" >> "$REPORT_FILE"
-    echo "\n>> SSH login attempts in last 24 hours:" >> "$REPORT_FILE"
-    grep "sshd" /var/log/auth.log | grep "Failed" | tail -n 20 >> "$REPORT_FILE"
-}
+# ===== SECTION 2: FILE AND DIRECTORY PERMISSIONS =====
+header "Section 2: File and Directory Permissions"
+echo "World-writable files:" | tee -a "$REPORT_FILE"
+find / -xdev -type f -perm -0002 2>/dev/null | tee -a "$REPORT_FILE"
+echo -e "\nSSH directory permissions:" | tee -a "$REPORT_FILE"
+find /home -name .ssh -exec ls -ld {} + 2>/dev/null | tee -a "$REPORT_FILE"
+echo -e "\nFiles with SUID/SGID:" | tee -a "$REPORT_FILE"
+find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null | tee -a "$REPORT_FILE"
 
-# ===============================
-# Section 8: SSH, GRUB, IPv6 Hardening
-# ===============================
-hardening_steps() {
-    echo "\n[SECTION 8: SSH, GRUB, IPv6 Hardening]" >> "$REPORT_FILE"
+# ===== SECTION 3: SERVICE AUDITS =====
+header "Section 3: Service Audits"
+echo "Running services:" | tee -a "$REPORT_FILE"
+systemctl list-units --type=service --state=running | tee -a "$REPORT_FILE"
+echo -e "\nEnabled services:" | tee -a "$REPORT_FILE"
+systemctl list-unit-files --type=service | grep enabled | tee -a "$REPORT_FILE"
+echo -e "\nListening ports:" | tee -a "$REPORT_FILE"
+ss -tuln | tee -a "$REPORT_FILE"
 
-    echo "\n>> SSH Configuration:" >> "$REPORT_FILE"
-    grep -Ei 'PermitRootLogin|PasswordAuthentication' /etc/ssh/sshd_config >> "$REPORT_FILE"
+# ===== SECTION 4: FIREWALL AND NETWORK SECURITY =====
+header "Section 4: Firewall and Network Security"
+echo "Firewall status (ufw):" | tee -a "$REPORT_FILE"
+ufw status verbose 2>/dev/null | tee -a "$REPORT_FILE"
+echo -e "\nOpen ports:" | tee -a "$REPORT_FILE"
+lsof -i -P -n | grep LISTEN | tee -a "$REPORT_FILE"
+echo -e "\nIP forwarding status:" | tee -a "$REPORT_FILE"
+cat /proc/sys/net/ipv4/ip_forward | tee -a "$REPORT_FILE"
 
-    echo "\n>> IPv6 status:" >> "$REPORT_FILE"
-    sysctl net.ipv6.conf.all.disable_ipv6 >> "$REPORT_FILE"
+# ===== SECTION 5: IP AND NETWORK CONFIGURATION CHECKS =====
+header "Section 5: IP and Network Configuration"
+ip -4 addr show | grep inet | tee -a "$REPORT_FILE"
+ip -6 addr show | grep inet6 | tee -a "$REPORT_FILE"
+echo -e "\nHostname IPs:" | tee -a "$REPORT_FILE"
+hostname -I | tee -a "$REPORT_FILE"
+echo -e "\nChecking for public IP exposure..." | tee -a "$REPORT_FILE"
+if curl -s ifconfig.me | grep -qE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b'; then
+    warning "Public IP detected: $(curl -s ifconfig.me)"
+fi
 
-    echo "\n>> GRUB Password Protection Check:" >> "$REPORT_FILE"
-    grep GRUB2_PASSWORD /etc/grub.d/40_custom >> "$REPORT_FILE" 2>/dev/null
-}
+# ===== SECTION 6: SECURITY UPDATES AND PATCHING =====
+header "Section 6: Security Updates"
+apt update -qq && apt list --upgradable 2>/dev/null | tee -a "$REPORT_FILE"
+if ! dpkg -l | grep -q unattended-upgrades; then
+    echo "Installing unattended-upgrades..." | tee -a "$REPORT_FILE"
+    apt-get install -y unattended-upgrades
+fi
 
-# ===============================
-# Section 9: Automatic Updates
-# ===============================
-auto_update_config() {
-    echo "\n[SECTION 9: Automatic Updates]" >> "$REPORT_FILE"
-    grep -E '^Unattended-Upgrade::Automatic-Reboot|Install-On-Shutdown' /etc/apt/apt.conf.d/* >> "$REPORT_FILE" 2>/dev/null
-}
+# ===== SECTION 7: LOG MONITORING =====
+header "Section 7: Log Monitoring"
+echo "Recent suspicious SSH logins (last 50):" | tee -a "$REPORT_FILE"
+tail -n 50 /var/log/auth.log | grep sshd | tee -a "$REPORT_FILE"
 
-# ===============================
-# Section 10: Reporting and Email Alerts
-# ===============================
-send_report_via_email() {
-    read -rp "Enter the email address to send the audit report: " RECIPIENT_EMAIL
+# ===== SECTION 8: SSH, BOOTLOADER, IPV6, FIREWALL HARDENING =====
+header "Section 8: Server Hardening"
+echo -e "\nSSH Config Changes:" | tee -a "$REPORT_FILE"
+sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+systemctl restart sshd
+status "SSH hardening complete."
 
-    if ! command -v mailx &>/dev/null; then
-        echo "[*] Installing 'mailx'..."
-        if [ -f /etc/debian_version ]; then
-            sudo apt update && sudo apt install -y mailutils
-        elif [ -f /etc/redhat-release ]; then
-            sudo yum install -y mailx
-        else
-            echo "[!] Unsupported OS for mailx install."
-            return 1
-        fi
-    fi
+echo -e "\nDisabling IPv6:" | tee -a "$REPORT_FILE"
+echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.conf
+echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf
+sysctl -p | tee -a "$REPORT_FILE"
 
-    echo "Security audit report for $(hostname) on $(date)" | \
-        mailx -s "🛡️ Linux Audit Report - $(hostname)" -a "$REPORT_FILE" "$RECIPIENT_EMAIL"
+echo -e "\nSetting GRUB password (manual step recommended)." | tee -a "$REPORT_FILE"
+warning "You must manually configure /etc/grub.d/40_custom with a GRUB password."
 
-    if [ $? -eq 0 ]; then
-        echo "[+] Email sent successfully to $RECIPIENT_EMAIL."
-    else
-        echo "[!] Failed to send email to $RECIPIENT_EMAIL."
-    fi
-}
+# ===== SECTION 9: CUSTOM SECURITY CHECKS =====
+header "Section 9: Custom Security Checks"
+if [[ -f "$CUSTOM_CHECKS_FILE" ]]; then
+    bash "$CUSTOM_CHECKS_FILE" | tee -a "$REPORT_FILE"
+else
+    warning "Custom checks file not found. Skipping."
+fi
 
-# ===============================
-# MAIN
-# ===============================
-echo "[+] Starting Security Audit and Hardening..."
-user_group_audit
-file_permission_audit
-service_audit
-firewall_network_audit
-ip_check
-security_updates
-log_monitoring
-hardening_steps
-auto_update_config
-send_report_via_email
+# ===== SECTION 10: REPORTING AND EMAIL =====
+header "Section 10: Reporting and Email"
+read -p "Enter email address to send report: " EMAIL_ADDR
+if ! command -v mail &>/dev/null; then
+    echo "Installing mailutils..." | tee -a "$REPORT_FILE"
+    apt-get install -y mailutils
+fi
 
-echo "[+] Audit Completed. Report saved to: $REPORT_FILE"
+mail -s "Security Audit Report" "$EMAIL_ADDR" < "$REPORT_FILE"
+status "Email sent to $EMAIL_ADDR"
+
+header "Audit Completed. Report saved to: $
