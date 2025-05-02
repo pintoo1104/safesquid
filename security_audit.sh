@@ -53,79 +53,41 @@ user_audit() {
 }
 
 # 2. File and Directory Permissions
-file_permissions() {
+file_permission_audit() {
     print_title "2. FILE AND DIRECTORY PERMISSIONS"
 
-    section "Files with world-writable permissions"
-    world_writable_files=$(find / -type f -perm -002 2>/dev/null)
+    section "Files and Directories with World-Writable Permissions"
+    world_writable_files=$(find / -xdev -type f -perm -0002 2>/dev/null)
     log_and_print "$world_writable_files"
     log_and_print "\n→ Total world-writable files: $(echo "$world_writable_files" | wc -l)"
 
-    section "Directories with world-writable permissions"
-    world_writable_dirs=$(find / -type d -perm -002 2>/dev/null)
-    log_and_print "$world_writable_dirs"
-    log_and_print "\n→ Total world-writable directories: $(echo "$world_writable_dirs" | wc -l)"
-
-    section "Presence of .ssh directories with secure permissions"
+    section "Checking for .ssh Directories with Secure Permissions"
     ssh_dirs=$(find / -type d -name ".ssh" -exec ls -ld {} \; 2>/dev/null)
     log_and_print "$ssh_dirs"
+    log_and_print "\n→ Total .ssh directories: $(echo "$ssh_dirs" | wc -l)"
 
-    section "Files with SUID or SGID bits set"
-    suid_sgid_files=$(find / -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null)
+    section "Files with SUID or SGID Bits Set"
+    suid_sgid_files=$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null)
     log_and_print "$suid_sgid_files"
-    log_and_print "\n→ Total files with SUID/SGID bits set: $(echo "$suid_sgid_files" | wc -l)"
+    log_and_print "\n→ Total SUID/SGID files: $(echo "$suid_sgid_files" | wc -l)"
 }
 
 # 3. Service Audits
 service_audit() {
-    print_title "3. SERVICE AUDIT"
+    print_title "3. SERVICE AUDITS"
 
     section "Running Services"
     running_services=$(systemctl list-units --type=service --state=running)
     log_and_print "$running_services"
 
-    section "Critical Services Check"
-    critical_services=("sshd" "iptables")
-    for service in "${critical_services[@]}"; do
-        status=$(systemctl is-active "$service")
-        log_and_print "$service: $status"
-    done
+    section "Critical Services"
+    critical_services=$(systemctl list-units --type=service --state=running | grep -E 'sshd|iptables')
+    log_and_print "$critical_services"
 
-    section "Services Listening on Non-Standard Ports"
-    non_standard_ports=$(ss -tuln | grep -vE ':(22|80|443|8080)' 2>/dev/null)
+    section "Checking for Services Listening on Non-Standard Ports"
+    non_standard_ports=$(ss -tuln | grep -vE '22|80|443')
     log_and_print "$non_standard_ports"
-}
-
-# 5. IP and Network Configuration Checks
-network_configuration() {
-    print_title "5. IP AND NETWORK CONFIGURATION CHECKS"
-
-    section "Assigned IP Addresses"
-    ip_addresses=$(hostname -I)
-    log_and_print "IP Addresses assigned to the server: $ip_addresses"
-
-    section "Public vs Private IP Check"
-    public_ips=""
-    private_ips=""
-    for ip in $ip_addresses; do
-        if echo "$ip" | grep -E "^(10\.|172\.16\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)" >/dev/null; then
-            private_ips="$private_ips\n$ip (Private)"
-        else
-            public_ips="$public_ips\n$ip (Public)"
-        fi
-    done
-    log_and_print "Private IPs: $private_ips"
-    log_and_print "Public IPs: $public_ips"
-
-    section "Sensitive Services on Public IP"
-    if [[ -n "$public_ips" ]]; then
-        services=$(ss -tuln | grep -E 'ssh' 2>/dev/null)
-        if [[ -n "$services" ]]; then
-            log_and_print "Sensitive services (SSH) exposed on public IPs:\n$services"
-        else
-            log_and_print "No sensitive services exposed on public IPs."
-        fi
-    fi
+    log_and_print "\n→ Total services on non-standard ports: $(echo "$non_standard_ports" | wc -l)"
 }
 
 # 6. Security Updates and Patching
@@ -145,6 +107,11 @@ security_updates() {
     else
         log_and_print "→ Automatic updates are enabled."
     fi
+
+    # Check if automatic updates are working by examining logs
+    section "Unattended-upgrades Logs"
+    update_logs=$(cat /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null)
+    log_and_print "$update_logs"
 }
 
 # Main function to start the audit
@@ -155,20 +122,15 @@ main() {
     # Run the User and Group Audits
     user_audit
 
-    # Run the File and Directory Permissions audit
-    file_permissions
+    # Run the File and Directory Permissions Audit
+    file_permission_audit
 
     # Run the Service Audits
     service_audit
 
-    # Run the IP and Network Configuration Checks
-    network_configuration
-
-    # Run the Security Updates and Patching audit
+    # Run the Security Updates Check
     security_updates
-
-    # Future calls for other sections will go here
-
+    
     echo -e "\n\033[1;32m=== Security Audit Completed ===\033[0m"
 }
 
