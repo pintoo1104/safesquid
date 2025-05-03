@@ -52,7 +52,7 @@ while true; do
   # Top Processes
   draw_section "${YELLOW}Top Processes (CPU & Mem)${RESET}"
   printf "| %-3s | %-15s | %-8s | %-10s |\n" "#" "Process Name" "CPU (%)" "Memory (MB)"
-  ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 6 | tail -n 5 | awk '{printf "| %-3d | %-15s | %-8s | %-10s |\n", NR, $2, $3, int($4 * 16)}'
+  ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 11 | tail -n 10 | awk '{printf "| %-3d | %-15s | %-8s | %-10s |\n", NR, $2, $3, int($4 * 16)}'
   draw_box 60
 
   # Network Monitoring
