@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ===== CONFIGURATION =====
-REPORT_FILE="$(pwd)/security_audit_report_$(date +%F_%T).txt"
+TIMESTAMP=$(date +%F_%H-%M-%S)
+REPORT_FILE="$(pwd)/security_audit_report_$TIMESTAMP.txt"
 CUSTOM_CHECKS_FILE="custom_checks.sh"
-CONFIG_FILE="config.cfg"
 
 # ===== COLORS =====
 RED="\033[0;31m"
@@ -12,6 +12,7 @@ YELLOW="\033[1;33m"
 BLUE="\033[1;34m"
 NC="\033[0m"
 
+# ===== FUNCTIONS =====
 function header() {
     echo -e "\n${BLUE}========== $1 ==========${NC}" | tee -a "$REPORT_FILE"
 }
@@ -28,111 +29,110 @@ function error() {
     echo -e "${RED}[ERROR]${NC} $1" | tee -a "$REPORT_FILE"
 }
 
+function install_if_missing() {
+    local pkg=$1
+    if ! command -v "$pkg" &>/dev/null; then
+        echo "Installing $pkg..." | tee -a "$REPORT_FILE"
+        apt-get update -qq && apt-get install -y "$pkg"
+    else
+        status "$pkg is already installed."
+    fi
+}
+
 # ===== SECTION 1: USER AND GROUP AUDITS =====
 header "Section 1: User and Group Audits"
-echo "Users:" | tee -a "$REPORT_FILE"
 cut -d: -f1 /etc/passwd | tee -a "$REPORT_FILE"
-echo -e "\nGroups:" | tee -a "$REPORT_FILE"
 cut -d: -f1 /etc/group | tee -a "$REPORT_FILE"
 
 uid0_users=$(awk -F: '$3 == 0 {print $1}' /etc/passwd)
 echo -e "\nUsers with UID 0: $uid0_users" | tee -a "$REPORT_FILE"
 
-weak_pass_tool="john"
-if ! command -v $weak_pass_tool &>/dev/null; then
-    echo "Installing $weak_pass_tool..." | tee -a "$REPORT_FILE"
-    apt-get update && apt-get install -y john
-else
-    status "$weak_pass_tool already installed."
-fi
-
-unshadow /etc/passwd /etc/shadow > /tmp/john_shadow_combined
+install_if_missing "john"
+install_if_missing "unshadow"
+unshadow /etc/passwd /etc/shadow > /tmp/john_shadow_combined 2>/dev/null
 john /tmp/john_shadow_combined --show | tee -a "$REPORT_FILE"
 
 # ===== SECTION 2: FILE AND DIRECTORY PERMISSIONS =====
 header "Section 2: File and Directory Permissions"
-echo "World-writable files:" | tee -a "$REPORT_FILE"
 find / -xdev -type f -perm -0002 2>/dev/null | tee -a "$REPORT_FILE"
-echo -e "\nSSH directory permissions:" | tee -a "$REPORT_FILE"
 find /home -name .ssh -exec ls -ld {} + 2>/dev/null | tee -a "$REPORT_FILE"
-echo -e "\nFiles with SUID/SGID:" | tee -a "$REPORT_FILE"
 find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null | tee -a "$REPORT_FILE"
 
 # ===== SECTION 3: SERVICE AUDITS =====
 header "Section 3: Service Audits"
-echo "Running services:" | tee -a "$REPORT_FILE"
 systemctl list-units --type=service --state=running | tee -a "$REPORT_FILE"
-echo -e "\nEnabled services:" | tee -a "$REPORT_FILE"
 systemctl list-unit-files --type=service | grep enabled | tee -a "$REPORT_FILE"
-echo -e "\nListening ports:" | tee -a "$REPORT_FILE"
 ss -tuln | tee -a "$REPORT_FILE"
 
 # ===== SECTION 4: FIREWALL AND NETWORK SECURITY =====
 header "Section 4: Firewall and Network Security"
-echo "Firewall status (ufw):" | tee -a "$REPORT_FILE"
+install_if_missing "ufw"
 ufw status verbose 2>/dev/null | tee -a "$REPORT_FILE"
-echo -e "\nOpen ports:" | tee -a "$REPORT_FILE"
 lsof -i -P -n | grep LISTEN | tee -a "$REPORT_FILE"
-echo -e "\nIP forwarding status:" | tee -a "$REPORT_FILE"
 cat /proc/sys/net/ipv4/ip_forward | tee -a "$REPORT_FILE"
 
-# ===== SECTION 5: IP AND NETWORK CONFIGURATION CHECKS =====
+# ===== SECTION 5: IP AND NETWORK CONFIGURATION =====
 header "Section 5: IP and Network Configuration"
 ip -4 addr show | grep inet | tee -a "$REPORT_FILE"
 ip -6 addr show | grep inet6 | tee -a "$REPORT_FILE"
-echo -e "\nHostname IPs:" | tee -a "$REPORT_FILE"
 hostname -I | tee -a "$REPORT_FILE"
-echo -e "\nChecking for public IP exposure..." | tee -a "$REPORT_FILE"
-if curl -s ifconfig.me | grep -qE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b'; then
-    warning "Public IP detected: $(curl -s ifconfig.me)"
+
+pub_ip=$(curl -s ifconfig.me)
+if [[ "$pub_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    warning "Public IP detected: $pub_ip"
 fi
 
 # ===== SECTION 6: SECURITY UPDATES AND PATCHING =====
 header "Section 6: Security Updates"
 apt update -qq && apt list --upgradable 2>/dev/null | tee -a "$REPORT_FILE"
-if ! dpkg -l | grep -q unattended-upgrades; then
-    echo "Installing unattended-upgrades..." | tee -a "$REPORT_FILE"
-    apt-get install -y unattended-upgrades
-fi
+install_if_missing "unattended-upgrades"
 
 # ===== SECTION 7: LOG MONITORING =====
 header "Section 7: Log Monitoring"
-echo "Recent suspicious SSH logins (last 50):" | tee -a "$REPORT_FILE"
 tail -n 50 /var/log/auth.log | grep sshd | tee -a "$REPORT_FILE"
 
-# ===== SECTION 8: SSH, BOOTLOADER, IPV6, FIREWALL HARDENING =====
-header "Section 8: Server Hardening"
-echo -e "\nSSH Config Changes:" | tee -a "$REPORT_FILE"
-sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+# ===== SECTION 8: HARDENING: SSH, IPV6, GRUB =====
+header "Section 8: Hardening Measures"
+
+echo -e "\nSSH Hardening..." | tee -a "$REPORT_FILE"
+sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 systemctl restart sshd
-status "SSH hardening complete."
+status "SSH config hardened."
 
-echo -e "\nDisabling IPv6:" | tee -a "$REPORT_FILE"
-echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.conf
-echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf
-sysctl -p | tee -a "$REPORT_FILE"
+echo -e "\nIPv6 Disabling..." | tee -a "$REPORT_FILE"
+sysctl_file="/etc/sysctl.d/99-ipv6-disable.conf"
+echo -e "net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1" > "$sysctl_file"
+sysctl -p "$sysctl_file" | tee -a "$REPORT_FILE"
 
-# ===== GRUB PASSWORD CONFIGURATION =====
-header "Setting GRUB Password"
-read -sp "Enter the GRUB password: " grub_pw
-echo -e "\nRe-enter the GRUB password: "
-read -sp "Re-enter the GRUB password: " grub_pw_confirm
+# GRUB PASSWORD SETUP (with expect)
+header "GRUB Password Setup"
 
-if [[ "$grub_pw" == "$grub_pw_confirm" ]]; then
-    echo "Setting the GRUB password..." | tee -a "$REPORT_FILE"
+install_if_missing "expect"
+read -sp "Enter GRUB password: " grub_pw
+echo
+read -sp "Re-enter GRUB password: " grub_pw2
+echo
 
-    # Encrypt the password using grub-mkpasswd-pbkdf2
-    grub_pw_hash=$(grub-mkpasswd-pbkdf2 <<< "$grub_pw" | grep -oP '(?<=password_pbkdf2 ).*')
+if [[ "$grub_pw" == "$grub_pw2" ]]; then
+    GRUB_HASH=$(expect -c "
+    spawn grub-mkpasswd-pbkdf2
+    expect \"Enter password:\"
+    send \"$grub_pw\r\"
+    expect \"Reenter password:\"
+    send \"$grub_pw\r\"
+    expect eof
+    " | grep -oP '(?<=password_pbkdf2 ).*')
 
-    # Add the GRUB password entry to 40_custom
-    echo -e "set superusers=\"root\"\npassword_pbkdf2 root $grub_pw_hash" >> /etc/grub.d/40_custom
-
-    # Update GRUB configuration
-    update-grub
-    status "GRUB password set successfully."
+    if ! grep -q "password_pbkdf2 root" /etc/grub.d/40_custom; then
+        echo -e "set superusers=\"root\"\npassword_pbkdf2 root $GRUB_HASH" >> /etc/grub.d/40_custom
+        update-grub
+        status "GRUB password set successfully."
+    else
+        warning "GRUB password already configured. Skipping."
+    fi
 else
-    error "Passwords do not match. GRUB password was not set."
+    error "Passwords did not match. GRUB password not set."
 fi
 
 # ===== SECTION 9: CUSTOM SECURITY CHECKS =====
@@ -140,18 +140,15 @@ header "Section 9: Custom Security Checks"
 if [[ -f "$CUSTOM_CHECKS_FILE" ]]; then
     bash "$CUSTOM_CHECKS_FILE" | tee -a "$REPORT_FILE"
 else
-    warning "Custom checks file not found. Skipping."
+    warning "Custom checks file not found: $CUSTOM_CHECKS_FILE"
 fi
 
-# ===== SECTION 10: REPORTING AND EMAIL =====
-header "Section 10: Reporting and Email"
+# ===== SECTION 10: REPORTING & EMAIL =====
+header "Section 10: Reporting & Email"
 read -p "Enter email address to send report: " EMAIL_ADDR
-if ! command -v mail &>/dev/null; then
-    echo "Installing mailutils..." | tee -a "$REPORT_FILE"
-    apt-get install -y mailutils
-fi
+install_if_missing "mailutils"
 
-mail -s "Security Audit Report" "$EMAIL_ADDR" < "$REPORT_FILE"
-status "Email sent to $EMAIL_ADDR"
+mail -s "Security Audit Report - $HOSTNAME" "$EMAIL_ADDR" < "$REPORT_FILE"
+status "Report sent to $EMAIL_ADDR"
 
-header "Audit Completed. Report saved to: $REPORT_FILE"
+header "Audit Completed - Report saved to $REPORT_FILE"
